@@ -24,7 +24,11 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except the public auth pages and Next's own assets.
-    "/((?!login|verify|_next/static|_next/image|favicon.ico|api/auth).*)",
+    // Everything except:
+    //   - /login and /verify (pre-auth pages)
+    //   - /api/auth/* (the API the login form hits)
+    //   - Next's internal asset paths
+    //   - any path with a file extension (favicon.ico, .svg, .png, .webmanifest, etc.)
+    "/((?!login|verify|api/auth|_next/static|_next/image|.*\\..*).*)",
   ],
 };
