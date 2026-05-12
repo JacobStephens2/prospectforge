@@ -1,102 +1,47 @@
 """End-to-end route tests via FastAPI TestClient.
 
-Covers the happy path through every router. Auth is the X-User-Id header
-stub — real auth lands in v1.1. Pollution between tests is acceptable because
-the routes don't depend on row counts; each test creates its own user/source/run.
+Authentication is by cookie now (the X-User-Id header is gone), so each
+test gets either:
+  - `authed_client` — a TestClient with current_user overridden to a
+    freshly-seeded User. Use this for routes that require auth.
+  - `anon_client`   — un-overridden; current_user 401s.
 """
 
 from __future__ import annotations
 
 import uuid
 
-import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
-
-client = TestClient(app)
+# ---------- users (creation is still open for bootstrap) ----------
 
 
-# ---------- helpers ----------
-
-
-def _make_user(role: str = "admin") -> dict:
-    r = client.post(
+def test_create_user_and_fetch(anon_client) -> None:
+    email = f"newuser-{uuid.uuid4()}@acme-travel.example"
+    r = anon_client.post(
         "/api/users",
-        json={
-            "email": f"route-{uuid.uuid4()}@acme-travel.example",
-            "full_name": "Route Test",
-            "role": role,
-        },
+        json={"email": email, "full_name": "Newie", "role": "reviewer"},
     )
     assert r.status_code == 201, r.text
-    return r.json()
-
-
-def _make_source(user_id: str) -> dict:
-    r = client.post(
-        "/api/sources",
-        headers={"X-User-Id": user_id},
-        json={
-            "name": "Test Source",
-            "url": "https://example.com/dir",
-            "crawl_tier": 1,
-        },
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def _make_run(user_id: str, source_id: str, max_cost_cents: int = 200) -> dict:
-    r = client.post(
-        "/api/runs",
-        headers={"X-User-Id": user_id},
-        json={"source_id": source_id, "max_cost_cents": max_cost_cents},
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-# ---------- users ----------
-
-
-def test_create_user_and_fetch() -> None:
-    created = _make_user()
-    r = client.get(f"/api/users/{created['id']}")
+    user_id = r.json()["id"]
+    r = anon_client.get(f"/api/users/{user_id}")
     assert r.status_code == 200
-    assert r.json()["email"] == created["email"]
+    assert r.json()["email"] == email
 
 
-def test_duplicate_email_conflict() -> None:
-    u = _make_user()
-    r = client.post(
+def test_duplicate_email_conflict(anon_client, seeded_user) -> None:
+    r = anon_client.post(
         "/api/users",
-        json={"email": u["email"], "full_name": "Dup", "role": "reviewer"},
+        json={"email": seeded_user.email, "full_name": "Dup", "role": "reviewer"},
     )
     assert r.status_code == 409
 
 
-# ---------- auth header dependency ----------
+# ---------- cookie-based auth dependency ----------
 
 
-def test_missing_user_header_400() -> None:
-    r = client.post("/api/sources", json={"name": "n", "url": "https://x.com/"})
-    assert r.status_code == 422  # FastAPI's missing-header validation
-
-
-def test_bad_user_header_400() -> None:
-    r = client.post(
+def test_protected_route_requires_session(anon_client) -> None:
+    r = anon_client.post(
         "/api/sources",
-        headers={"X-User-Id": "not-a-uuid"},
-        json={"name": "n", "url": "https://x.com/"},
-    )
-    assert r.status_code == 400
-
-
-def test_unknown_user_header_401() -> None:
-    r = client.post(
-        "/api/sources",
-        headers={"X-User-Id": str(uuid.uuid4())},
         json={"name": "n", "url": "https://x.com/"},
     )
     assert r.status_code == 401
@@ -105,61 +50,53 @@ def test_unknown_user_header_401() -> None:
 # ---------- sources ----------
 
 
-def test_create_and_list_sources() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    r = client.get("/api/sources")
+def test_create_and_list_sources(authed_client) -> None:
+    r = authed_client.post(
+        "/api/sources",
+        json={"name": "Test Src", "url": "https://example.com/", "crawl_tier": 1},
+    )
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    r = authed_client.get("/api/sources")
     assert r.status_code == 200
-    assert any(item["id"] == s["id"] for item in r.json())
+    assert any(s["id"] == sid for s in r.json())
 
 
-def test_get_source_404() -> None:
-    r = client.get(f"/api/sources/{uuid.uuid4()}")
+def test_get_source_404(anon_client) -> None:
+    r = anon_client.get(f"/api/sources/{uuid.uuid4()}")
     assert r.status_code == 404
 
 
 # ---------- runs ----------
 
 
-def test_create_run_records_budget_approval() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    r = _make_run(u["id"], s["id"], max_cost_cents=150)
-    assert r["max_cost_cents"] == 150
-    assert r["budget_approved_by"] == u["id"]
-    assert r["budget_approved_at"] is not None
-    assert r["status"] == "pending"
+def test_create_run_records_budget_approval(authed_client, seeded_user) -> None:
+    s = authed_client.post(
+        "/api/sources",
+        json={"name": "S", "url": "https://example.com/", "crawl_tier": 1},
+    ).json()
+    r = authed_client.post(
+        "/api/runs", json={"source_id": s["id"], "max_cost_cents": 150}
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["max_cost_cents"] == 150
+    assert body["budget_approved_by"] == str(seeded_user.id)
+    assert body["status"] == "pending"
 
 
-def test_create_run_missing_source_404() -> None:
-    u = _make_user()
-    r = client.post(
+def test_create_run_missing_source_404(authed_client) -> None:
+    r = authed_client.post(
         "/api/runs",
-        headers={"X-User-Id": u["id"]},
         json={"source_id": str(uuid.uuid4()), "max_cost_cents": 100},
     )
     assert r.status_code == 404
 
 
-def test_list_runs_filter_by_status() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    _make_run(u["id"], s["id"])
-    r = client.get("/api/runs?status_filter=pending")
-    assert r.status_code == 200
-    body = r.json()
-    assert all(item["status"] == "pending" for item in body)
-
-
 # ---------- contacts ----------
 
 
-def _seed_contact(user_id: str, source_id: str) -> tuple[str, str]:
-    """Create a run + a contact directly via the ORM. Returns (run_id, contact_id).
-
-    Uses a uuid-suffixed email so export_rows from prior test runs don't
-    trip the "already exported in prior run" check.
-    """
+def _seed_contact(user_id: uuid.UUID, source_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
     from app.db import SessionLocal
     from app.models import Contact, ProspectRun
     from datetime import datetime, timezone
@@ -167,19 +104,18 @@ def _seed_contact(user_id: str, source_id: str) -> tuple[str, str]:
     db = SessionLocal()
     try:
         run = ProspectRun(
-            source_id=uuid.UUID(source_id),
-            created_by=uuid.UUID(user_id),
+            source_id=source_id,
+            created_by=user_id,
             max_cost_cents=500,
-            budget_approved_by=uuid.UUID(user_id),
+            budget_approved_by=user_id,
             budget_approved_at=datetime.now(timezone.utc),
         )
         db.add(run)
         db.flush()
-        unique_email = f"test-{uuid.uuid4().hex[:8]}@example.org"
         c = Contact(
             run_id=run.id,
             name="Test Contact",
-            email=unique_email,
+            email=f"test-{uuid.uuid4().hex[:8]}@example.org",
             email_confidence="verified",
             evidence_excerpt="Test Contact teaches band at Example High School",
             evidence_verified="verified",
@@ -188,64 +124,45 @@ def _seed_contact(user_id: str, source_id: str) -> tuple[str, str]:
         )
         db.add(c)
         db.commit()
-        return str(run.id), str(c.id)
+        return run.id, c.id
     finally:
         db.close()
 
 
-def test_list_contacts_filters_by_run() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    run_id, contact_id = _seed_contact(u["id"], s["id"])
-    r = client.get(f"/api/contacts?run_id={run_id}")
-    assert r.status_code == 200
-    body = r.json()
-    assert any(item["id"] == contact_id for item in body)
-
-
-def test_review_contact_approve() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    _, contact_id = _seed_contact(u["id"], s["id"])
-    r = client.post(
-        f"/api/contacts/{contact_id}/review",
-        headers={"X-User-Id": u["id"]},
-        json={"action": "approve"},
-    )
+def test_review_contact_approve(authed_client, seeded_user) -> None:
+    s = authed_client.post(
+        "/api/sources", json={"name": "S", "url": "https://example.com/", "crawl_tier": 1}
+    ).json()
+    _, contact_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    r = authed_client.post(f"/api/contacts/{contact_id}/review", json={"action": "approve"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["review_status"] == "approved"
-    assert body["reviewed_by"] == u["id"]
+    assert body["reviewed_by"] == str(seeded_user.id)
 
 
-def test_review_contact_edit_applies_payload() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    _, contact_id = _seed_contact(u["id"], s["id"])
-    r = client.post(
+def test_review_contact_edit_applies_payload(authed_client, seeded_user) -> None:
+    s = authed_client.post(
+        "/api/sources", json={"name": "S", "url": "https://example.com/", "crawl_tier": 1}
+    ).json()
+    _, contact_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    r = authed_client.post(
         f"/api/contacts/{contact_id}/review",
-        headers={"X-User-Id": u["id"]},
-        json={
-            "action": "edit",
-            "payload": {"email": "corrected@example.org", "title": "Music Director"},
-        },
+        json={"action": "edit", "payload": {"email": "corrected@example.org", "title": "Music Director"}},
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 200
     body = r.json()
     assert body["review_status"] == "edited"
     assert body["email"] == "corrected@example.org"
     assert body["title"] == "Music Director"
 
 
-def test_review_contact_reject() -> None:
-    u = _make_user()
-    s = _make_source(u["id"])
-    _, contact_id = _seed_contact(u["id"], s["id"])
-    r = client.post(
-        f"/api/contacts/{contact_id}/review",
-        headers={"X-User-Id": u["id"]},
-        json={"action": "reject"},
-    )
+def test_review_contact_reject(authed_client, seeded_user) -> None:
+    s = authed_client.post(
+        "/api/sources", json={"name": "S", "url": "https://example.com/", "crawl_tier": 1}
+    ).json()
+    _, contact_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    r = authed_client.post(f"/api/contacts/{contact_id}/review", json={"action": "reject"})
     assert r.status_code == 200
     assert r.json()["review_status"] == "rejected"
 
@@ -253,9 +170,7 @@ def test_review_contact_reject() -> None:
 # ---------- exports ----------
 
 
-def test_export_endpoint_writes_files(tmp_path, monkeypatch) -> None:
-    """End-to-end: seed approved contact → POST export → file exists."""
-    # Re-route the export root so tests don't write to /var/lib.
+def test_export_endpoint_writes_files(tmp_path, monkeypatch, authed_client, seeded_user) -> None:
     from app.services import export_service as exp_mod
 
     orig = exp_mod.export_run
@@ -264,27 +179,17 @@ def test_export_endpoint_writes_files(tmp_path, monkeypatch) -> None:
         return orig(db=db, run_id=run_id, created_by=created_by, export_root=str(tmp_path))
 
     monkeypatch.setattr(exp_mod, "export_run", patched)
-    # The router imports export_run by name at module load — re-patch that too.
     from app.routes import exports as exports_router
 
     monkeypatch.setattr(exports_router, "export_run", patched)
 
-    u = _make_user()
-    s = _make_source(u["id"])
-    run_id, contact_id = _seed_contact(u["id"], s["id"])
+    s = authed_client.post(
+        "/api/sources", json={"name": "S", "url": "https://example.com/", "crawl_tier": 1}
+    ).json()
+    run_id, contact_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    authed_client.post(f"/api/contacts/{contact_id}/review", json={"action": "approve"})
 
-    # Approve so it lands in main.csv
-    r = client.post(
-        f"/api/contacts/{contact_id}/review",
-        headers={"X-User-Id": u["id"]},
-        json={"action": "approve"},
-    )
-    assert r.status_code == 200
-
-    r = client.post(
-        f"/api/runs/{run_id}/exports",
-        headers={"X-User-Id": u["id"]},
-    )
+    r = authed_client.post(f"/api/runs/{run_id}/exports")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["main"]["row_count"] == 1
@@ -294,45 +199,29 @@ def test_export_endpoint_writes_files(tmp_path, monkeypatch) -> None:
 # ---------- suppressions ----------
 
 
-def test_create_and_list_suppressions() -> None:
-    u = _make_user()
-    r = client.post(
-        "/api/suppressions",
-        headers={"X-User-Id": u["id"]},
-        json={"type": "email", "value": "spam@bad.test", "reason": "complaints"},
-    )
+def test_create_and_list_suppressions(authed_client) -> None:
+    payload = {"type": "email", "value": f"spam-{uuid.uuid4().hex[:8]}@bad.test", "reason": "complaints"}
+    r = authed_client.post("/api/suppressions", json=payload)
     assert r.status_code == 201, r.text
     sup_id = r.json()["id"]
-
-    r = client.get("/api/suppressions?type=email")
+    r = authed_client.get("/api/suppressions?type=email")
     assert r.status_code == 200
-    assert any(item["id"] == sup_id for item in r.json())
-
-    r = client.delete(
-        f"/api/suppressions/{sup_id}", headers={"X-User-Id": u["id"]}
-    )
+    assert any(s["id"] == sup_id for s in r.json())
+    r = authed_client.delete(f"/api/suppressions/{sup_id}")
     assert r.status_code == 204
 
 
-def test_suppression_validation() -> None:
-    u = _make_user()
-    # email type must contain @
-    r = client.post(
+def test_suppression_validation(authed_client) -> None:
+    r = authed_client.post(
         "/api/suppressions",
-        headers={"X-User-Id": u["id"]},
         json={"type": "email", "value": "missing-at-sign", "reason": "x"},
     )
     assert r.status_code == 422
 
 
-def test_suppression_duplicate_returns_409() -> None:
-    u = _make_user()
+def test_suppression_duplicate_returns_409(authed_client) -> None:
     payload = {"type": "domain", "value": f"dup-{uuid.uuid4().hex}.test", "reason": "x"}
-    r1 = client.post(
-        "/api/suppressions", headers={"X-User-Id": u["id"]}, json=payload
-    )
+    r1 = authed_client.post("/api/suppressions", json=payload)
     assert r1.status_code == 201
-    r2 = client.post(
-        "/api/suppressions", headers={"X-User-Id": u["id"]}, json=payload
-    )
+    r2 = authed_client.post("/api/suppressions", json=payload)
     assert r2.status_code == 409

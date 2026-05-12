@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Contact, ReviewAction, User
-from app.routes._common import acting_user
+from app.routes.auth import current_user
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
@@ -128,7 +128,7 @@ def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> Contact
 def review_contact(
     contact_id: uuid.UUID,
     body: ReviewBody,
-    user: User = Depends(acting_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ContactOut:
     """Record a review decision. Always writes a review_actions row for audit;

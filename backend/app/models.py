@@ -361,6 +361,50 @@ class ReviewAction(Base):
 # ---------- CRM Bridge caches ----------
 
 
+class MagicLinkToken(Base):
+    """One row per magic-link request. Single-use, 15-minute window."""
+
+    __tablename__ = "magic_link_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuthSession(Base):
+    """Server-side session record. The cookie carries the `token`; this row
+    is what makes it authoritative — revoked_at supports logout-from-here
+    and logout-everywhere without trusting the client."""
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class CRMAgenciesCache(Base):
     """Mirror of crm_db.tblAgency for dedupe (spec §10).
 

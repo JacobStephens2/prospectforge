@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Source, User
-from app.routes._common import acting_user
+from app.routes.auth import current_user
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 
@@ -39,7 +39,7 @@ class SourceOut(BaseModel):
 @router.post("", response_model=SourceOut, status_code=status.HTTP_201_CREATED)
 def create_source(
     body: SourceCreate,
-    user: User = Depends(acting_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SourceOut:
     source = Source(

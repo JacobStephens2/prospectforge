@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ProspectRun, Source, User
-from app.routes._common import acting_user
+from app.routes.auth import current_user
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -52,7 +52,7 @@ class RunOut(BaseModel):
 @router.post("", response_model=RunOut, status_code=status.HTTP_201_CREATED)
 def create_run(
     body: RunCreate,
-    user: User = Depends(acting_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> RunOut:
     source = db.query(Source).filter(Source.id == body.source_id).first()
@@ -112,7 +112,7 @@ class RunStartResult(BaseModel):
 @router.post("/{run_id}/start", response_model=RunStartResult)
 def start_run(
     run_id: uuid.UUID,
-    _user: User = Depends(acting_user),
+    _user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> RunStartResult:
     """Drive a pending run through the full pipeline.

@@ -2,11 +2,12 @@
 
 from fastapi import FastAPI
 
-from . import contacts, exports, runs, sources, suppressions, users
+from . import auth, contacts, exports, runs, sources, suppressions, users
 
 
 def register(app: FastAPI) -> None:
     """Wire all routers to the FastAPI app under /api."""
+    app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(sources.router)
     app.include_router(runs.router)

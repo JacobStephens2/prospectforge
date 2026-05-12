@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Export, User
-from app.routes._common import acting_user
+from app.routes.auth import current_user
 from app.services.export_service import export_run
 
 router = APIRouter(tags=["exports"])
@@ -47,7 +47,7 @@ class ExportSummary(BaseModel):
 @router.post("/api/runs/{run_id}/exports", response_model=ExportSummary)
 def create_export(
     run_id: uuid.UUID,
-    user: User = Depends(acting_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ExportSummary:
     try:

@@ -37,6 +37,17 @@ class Settings(BaseSettings):
 
     sentry_dsn: str = ""
 
+    # Auth / email
+    app_public_url: str = "https://prospect.acme-travel.example"
+    smtp_host: str = "smtp.mandrillapp.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "info@acme-travel.example"
+    mail_dev_mode: bool = False
+    auth_session_days: int = 30
+    auth_magic_link_minutes: int = 15
+
     @property
     def postgres_url(self) -> str:
         return (

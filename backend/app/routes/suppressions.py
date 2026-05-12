@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Suppression, User
-from app.routes._common import acting_user
+from app.routes.auth import current_user
 
 router = APIRouter(prefix="/api/suppressions", tags=["suppressions"])
 
@@ -54,7 +54,7 @@ class SuppressionOut(BaseModel):
 @router.post("", response_model=SuppressionOut, status_code=status.HTTP_201_CREATED)
 def create_suppression(
     body: SuppressionCreate,
-    user: User = Depends(acting_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SuppressionOut:
     sup = Suppression(
@@ -91,7 +91,7 @@ def list_suppressions(
 @router.delete("/{suppression_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_suppression(
     suppression_id: uuid.UUID,
-    _user: User = Depends(acting_user),
+    _user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     sup = db.query(Suppression).filter(Suppression.id == suppression_id).first()
