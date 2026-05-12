@@ -8,7 +8,11 @@ client = TestClient(app)
 def test_health() -> None:
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["db"] == "ok"
+    # Migration 0001 seeds two prompt_versions (classify, extract).
+    assert body["prompt_versions_seeded"] == 2
 
 
 def test_root() -> None:

@@ -6,13 +6,14 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from app.config import settings
+from app.db import Base
+from app import models  # noqa: F401  — populates Base.metadata
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Metadata target — wired up once models land in Phase 1 Agent 2.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
