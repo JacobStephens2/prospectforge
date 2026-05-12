@@ -3,15 +3,17 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app import routes
 from app.config import settings
 from app.db import get_db
 from app.models import PromptVersion
 
 app = FastAPI(
     title="ProspectForge API",
-    version="0.0.0",
-    description="Acme's contact-sourcing tool. Phase 0 scaffold; endpoints land per spec §18 DAG.",
+    version="0.1.0",
+    description="Acme's contact-sourcing tool. See spec §18 DAG.",
 )
+routes.register(app)
 
 
 class HealthResponse(BaseModel):
