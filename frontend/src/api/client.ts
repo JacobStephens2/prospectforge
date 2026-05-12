@@ -2,8 +2,10 @@
  * Thin fetch wrapper. All routes go through Next's /api/* rewrite to the
  * backend (see next.config.js), so we just call them with the relative path.
  *
- * X-User-Id is read from NEXT_PUBLIC_USER_ID for now — replaces with real
- * auth when v1.1 SSO lands. Spec §3.
+ * Auth is by `pf_session` cookie. Browsers send same-origin cookies
+ * automatically, so we don't need to do anything special — but we DO need
+ * `credentials: "same-origin"` (the default for fetch) and to NOT set any
+ * forbidden cookie header explicitly.
  */
 
 export class ApiError extends Error {
@@ -12,29 +14,25 @@ export class ApiError extends Error {
   }
 }
 
-function userId(): string {
-  // Set NEXT_PUBLIC_USER_ID in the environment to identify the acting user.
-  // Until SSO lands, this is a UUID per browser session.
-  return process.env.NEXT_PUBLIC_USER_ID ?? "";
-}
-
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  expectAuth = false,
+  opts: { redirectOn401?: boolean } = {},
 ): Promise<T> {
+  const { redirectOn401 = true } = opts;
   const headers = new Headers(init.headers);
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
   }
-  if (expectAuth) {
-    const uid = userId();
-    if (!uid) {
-      throw new ApiError(401, "NEXT_PUBLIC_USER_ID not set");
+  const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  if (res.status === 401) {
+    // Session expired or invalid. The default is to kick to /login —
+    // but `me()` opts out (it's the probe Nav uses to detect auth state).
+    if (redirectOn401 && typeof window !== "undefined" && window.location.pathname !== "/login") {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
     }
-    headers.set("X-User-Id", uid);
+    throw new ApiError(401, "not authenticated");
   }
-  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     let body: unknown = null;
     try {
@@ -49,23 +47,33 @@ async function request<T>(
 }
 
 export const api = {
+  // Auth
+  requestMagicLink: (email: string) =>
+    request<void>(
+      "/api/auth/request",
+      { method: "POST", body: JSON.stringify({ email }) },
+      { redirectOn401: false },
+    ),
+  me: () => request<Me>("/api/auth/me", {}, { redirectOn401: false }),
+  logout: () =>
+    request<void>("/api/auth/logout", { method: "POST" }, { redirectOn401: false }),
   // Users
   createUser: (b: { email: string; full_name: string; role: string }) =>
     request("/api/users", { method: "POST", body: JSON.stringify(b) }),
   // Sources
   listSources: () => request<Source[]>("/api/sources"),
   createSource: (b: Partial<Source>) =>
-    request<Source>("/api/sources", { method: "POST", body: JSON.stringify(b) }, true),
+    request<Source>("/api/sources", { method: "POST", body: JSON.stringify(b) }),
   // Runs
   listRuns: (status?: string) =>
     request<Run[]>(`/api/runs${status ? `?status_filter=${status}` : ""}`),
   getRun: (id: string) => request<Run>(`/api/runs/${id}`),
   createRun: (b: { source_id: string; max_cost_cents: number }) =>
-    request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }, true),
+    request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }),
   startRun: (id: string) =>
-    request<RunStartResult>(`/api/runs/${id}/start`, { method: "POST" }, true),
+    request<RunStartResult>(`/api/runs/${id}/start`, { method: "POST" }),
   exportRun: (id: string) =>
-    request<ExportSummary>(`/api/runs/${id}/exports`, { method: "POST" }, true),
+    request<ExportSummary>(`/api/runs/${id}/exports`, { method: "POST" }),
   listExports: (run_id: string) => request<ExportRow[]>(`/api/runs/${run_id}/exports`),
   // Contacts
   listContacts: (params: {
@@ -83,22 +91,24 @@ export const api = {
     return request<Contact[]>(`/api/contacts${qs ? `?${qs}` : ""}`);
   },
   reviewContact: (id: string, action: string, payload?: Record<string, unknown>) =>
-    request<Contact>(
-      `/api/contacts/${id}/review`,
-      { method: "POST", body: JSON.stringify({ action, payload }) },
-      true,
-    ),
+    request<Contact>(`/api/contacts/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ action, payload }),
+    }),
   // Suppressions
   listSuppressions: () => request<Suppression[]>("/api/suppressions"),
   createSuppression: (b: { type: string; value: string; reason: string }) =>
-    request<Suppression>(
-      "/api/suppressions",
-      { method: "POST", body: JSON.stringify(b) },
-      true,
-    ),
+    request<Suppression>("/api/suppressions", { method: "POST", body: JSON.stringify(b) }),
   deleteSuppression: (id: string) =>
-    request<void>(`/api/suppressions/${id}`, { method: "DELETE" }, true),
+    request<void>(`/api/suppressions/${id}`, { method: "DELETE" }),
 };
+
+export interface Me {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+}
 
 // ----- shared types (replace with codegen output of `pnpm run gen-api`) -----
 

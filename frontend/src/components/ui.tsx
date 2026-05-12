@@ -23,12 +23,19 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger";
 }) {
-  const base = "inline-flex items-center justify-center rounded-md text-sm font-medium px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition";
+  // CRM's stylesheet: default button is green, delete is red, secondary is
+  // blue. We follow the same palette so the apps feel consistent.
+  const base =
+    "inline-flex items-center justify-center rounded text-sm font-bold px-4 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition";
   const variants = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700",
-    secondary: "bg-white border border-neutral-300 text-neutral-900 hover:bg-neutral-100",
-    ghost: "bg-transparent text-neutral-700 hover:bg-neutral-100",
-    danger: "bg-red-600 text-white hover:bg-red-700",
+    primary:
+      "bg-brand-green-light text-white hover:bg-brand-green",
+    secondary:
+      "bg-white border border-brand-gray text-brand-blue hover:bg-brand-gray-light",
+    ghost:
+      "bg-transparent text-brand-blue-light hover:bg-brand-gray-light",
+    danger:
+      "bg-brand-red text-white hover:bg-brand-red-dark",
   };
   return <button className={clsx(base, variants[variant], className)} {...props} />;
 }
@@ -40,8 +47,8 @@ export function Input({
   return (
     <input
       className={clsx(
-        "w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm",
-        "placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-blue-500",
+        "w-full rounded border border-brand-gray bg-white px-3 py-1.5 text-sm text-brand-blue",
+        "placeholder:text-brand-gray focus:outline-none focus:ring-2 focus:ring-brand-blue-light",
         className,
       )}
       {...props}
@@ -56,8 +63,8 @@ export function Textarea({
   return (
     <textarea
       className={clsx(
-        "w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm",
-        "placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-blue-500",
+        "w-full rounded border border-brand-gray bg-white px-3 py-1.5 text-sm text-brand-blue",
+        "placeholder:text-brand-gray focus:outline-none focus:ring-2 focus:ring-brand-blue-light",
         className,
       )}
       {...props}
@@ -72,8 +79,8 @@ export function Select({
   return (
     <select
       className={clsx(
-        "rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm",
-        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+        "rounded border border-brand-gray bg-white px-2 py-1 text-sm text-brand-blue",
+        "focus:outline-none focus:ring-2 focus:ring-brand-blue-light",
         className,
       )}
       {...props}
@@ -88,7 +95,7 @@ export function Card({
   return (
     <div
       className={clsx(
-        "rounded-lg border border-neutral-200 bg-white shadow-sm p-4",
+        "rounded-lg border border-brand-gray-light bg-white shadow-sm p-4",
         className,
       )}
       {...props}
@@ -103,17 +110,19 @@ export function Badge({
   children: ReactNode;
   intent?: "neutral" | "ok" | "warn" | "bad" | "info";
 }) {
+  // Tonal palette derived from Acme brand colors. Light-tint background +
+  // saturated text. ok=green, info=navy, warn=yellow, bad=red.
   const intents = {
-    neutral: "bg-neutral-100 text-neutral-700",
-    ok: "bg-green-100 text-green-800",
-    warn: "bg-amber-100 text-amber-800",
-    bad: "bg-red-100 text-red-800",
-    info: "bg-blue-100 text-blue-800",
+    neutral: "bg-brand-gray-light text-brand-blue",
+    ok: "bg-brand-green-light/15 text-brand-green",
+    warn: "bg-brand-yellow/30 text-brand-blue",
+    bad: "bg-brand-red/15 text-brand-red-dark",
+    info: "bg-brand-blue-light/15 text-brand-blue-light",
   };
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold",
         intents[intent],
       )}
     >

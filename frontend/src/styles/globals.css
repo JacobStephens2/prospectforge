@@ -1,14 +1,21 @@
+/* Work Sans matches CRM's font-family declaration. Self-host via
+   next/font/google would be cleaner but the @import works without
+   touching the layout. */
+@import url("https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   html, body {
-    @apply bg-neutral-50 text-neutral-900 antialiased;
+    @apply bg-brand-surface text-brand-blue antialiased font-sans;
   }
-  a { @apply text-blue-700 hover:underline; }
-  h1 { @apply text-2xl font-semibold tracking-tight; }
-  h2 { @apply text-xl font-semibold tracking-tight; }
-  h3 { @apply text-lg font-medium; }
-  code { @apply font-mono text-sm bg-neutral-100 px-1 py-0.5 rounded; }
+  a { @apply text-brand-blue-light hover:underline; }
+  h1 { @apply text-2xl font-bold text-brand-blue; }
+  h2 { @apply text-xl font-bold text-brand-blue; }
+  h3 { @apply text-lg font-semibold text-brand-blue; }
+  code { @apply font-mono text-sm bg-brand-gray-light px-1 py-0.5 rounded text-brand-blue; }
+  /* Required-field marker pattern from CRM's stylesheet */
+  label.required::after { content: " *"; @apply text-brand-red; }
 }

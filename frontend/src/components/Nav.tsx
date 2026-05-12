@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import clsx from "clsx";
+import { api, type Me } from "@/api/client";
 
 const items = [
   { href: "/sources", label: "Sources" },
@@ -13,13 +15,28 @@ const items = [
 
 export function Nav() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [me, setMe] = useState<Me | null>(null);
+
+  useEffect(() => {
+    api.me().then(setMe).catch(() => setMe(null));
+  }, [pathname]);
+
+  async function logout() {
+    try {
+      await api.logout();
+    } finally {
+      router.replace("/login");
+    }
+  }
+
   return (
-    <nav className="border-b border-neutral-200 bg-white">
+    <nav className="border-b-2 border-brand-blue bg-white">
       <div className="mx-auto max-w-6xl px-4 py-3 flex items-center gap-6">
-        <Link href="/" className="font-semibold text-neutral-900 no-underline">
+        <Link href="/" className="font-bold text-brand-blue no-underline text-lg tracking-tight">
           ProspectForge
         </Link>
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-1">
           {items.map((it) => {
             const active = pathname.startsWith(it.href);
             return (
@@ -27,10 +44,10 @@ export function Nav() {
                 key={it.href}
                 href={it.href}
                 className={clsx(
-                  "px-3 py-1.5 rounded-md text-sm no-underline transition",
+                  "px-3 py-1.5 rounded text-sm font-medium no-underline transition",
                   active
-                    ? "bg-blue-100 text-blue-900"
-                    : "text-neutral-700 hover:bg-neutral-100",
+                    ? "bg-brand-blue text-white"
+                    : "text-brand-blue hover:bg-brand-gray-light",
                 )}
               >
                 {it.label}
@@ -38,6 +55,17 @@ export function Nav() {
             );
           })}
         </div>
+        {me && (
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-brand-blue font-medium">{me.full_name}</span>
+            <button
+              onClick={logout}
+              className="text-brand-blue-light hover:underline text-xs"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </nav>
   );
