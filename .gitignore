@@ -1,0 +1,33 @@
+# Local config
+.env
+.env.local
+*.env.runtime
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OpenAPI artifact (regenerated)
+openapi.json
+
+# Logs / scratch
+*.log
+exports/
+archive/
+.scratch/

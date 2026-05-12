@@ -1,0 +1,31 @@
+# Pinned for reproducible builds. Bump deliberately, not as a side effect.
+
+# Web
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# DB
+SQLAlchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+pymysql==1.1.1            # for CRM Bridge read-only sync
+
+# Queue / cache
+redis==5.2.1
+rq==2.0.0
+
+# LLM + HTTP
+anthropic==0.42.0
+httpx==0.28.1
+trafilatura==2.0.0
+
+# Observability
+sentry-sdk[fastapi]==2.19.2
+structlog==24.4.0
+
+# Tests
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx-sse==0.4.0
