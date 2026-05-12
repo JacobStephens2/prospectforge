@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     pf_max_cost_cents_default: int = 2000
     pf_firecrawl_enabled: bool = False
 
+    # Comma-separated CIDRs / IPs to add to the SSRF denylist on top of the
+    # always-blocked ranges (private, loopback, link-local, metadata).
+    # Defaulted to the Acme internal IPs we know we never want to scrape.
+    pf_ssrf_internal_ip_denylist: str = (
+        "203.0.113.10,203.0.113.11,143.244.168.75,192.241.157.189"
+    )
+
     sentry_dsn: str = ""
 
     @property
