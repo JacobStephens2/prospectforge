@@ -50,9 +50,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    volumes:
+      # Persist exports and archive across container rebuilds. /var/lib paths
+      # match spec §4.2; on prospect we'll bind-mount /var/lib/prospectforge
+      # later for backup integration.
+      - pf_state:/var/lib/prospectforge
     # Code is baked into the image; for live-reload dev, mount ./backend:/app
     # and override CMD to `uvicorn --reload`.
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "127.0.0.1:3000:3000"
 
 volumes:
   pg_data:
   redis_data:
+  pf_state:

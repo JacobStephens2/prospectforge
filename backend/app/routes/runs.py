@@ -97,3 +97,42 @@ def get_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> RunOut:
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return RunOut.model_validate(run)
+
+
+class RunStartResult(BaseModel):
+    final_status: str
+    pages_fetched: int
+    pages_blocked: int
+    organizations: int
+    contacts: int
+    cost_cents: int
+    error: str | None
+
+
+@router.post("/{run_id}/start", response_model=RunStartResult)
+def start_run(
+    run_id: uuid.UUID,
+    _user: User = Depends(acting_user),
+    db: Session = Depends(get_db),
+) -> RunStartResult:
+    """Drive a pending run through the full pipeline.
+
+    Synchronous in v1 — RQ enqueue is a one-line swap (see workers/run_runner.py).
+    Returns the final summary; for long runs the response is the after-state
+    of the work, not a job acknowledgement.
+    """
+    from app.services.run_orchestrator import execute_run
+
+    try:
+        summary = execute_run(db=db, run_id=run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RunStartResult(
+        final_status=summary.final_status,
+        pages_fetched=summary.pages_fetched,
+        pages_blocked=summary.pages_blocked,
+        organizations=summary.organizations_extracted,
+        contacts=summary.contacts_extracted,
+        cost_cents=summary.cost_cents,
+        error=summary.error,
+    )

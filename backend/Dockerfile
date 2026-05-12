@@ -24,6 +24,9 @@ COPY tests/ ./tests/
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
 
+# The app's own state directories. /var/lib paths are spec §4.2.
+RUN mkdir -p /var/lib/prospectforge/exports /var/lib/prospectforge/archive
+
 # Non-root inside container (spec §4.4: app code runs non-root)
 RUN useradd --system --create-home --shell /bin/bash app \
     && chown -R app:app /app

@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    @apply bg-neutral-50 text-neutral-900 antialiased;
+  }
+  a { @apply text-blue-700 hover:underline; }
+  h1 { @apply text-2xl font-semibold tracking-tight; }
+  h2 { @apply text-xl font-semibold tracking-tight; }
+  h3 { @apply text-lg font-medium; }
+  code { @apply font-mono text-sm bg-neutral-100 px-1 py-0.5 rounded; }
+}

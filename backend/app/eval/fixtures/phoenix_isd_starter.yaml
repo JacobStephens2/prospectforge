@@ -1,0 +1,22 @@
+name: phoenix_isd_starter
+description: |
+  Starter fixture covering the basic happy path: a faculty directory with
+  two contacts whose roles match Acme's segment vocabulary, each with a
+  direct email and a quotable evidence snippet. Used to smoke-test the
+  harness itself; not pilot-representative.
+source_url: https://phoenixisd.example.org/faculty
+page_text: |
+  Phoenix Independent School District — 2024-25 Faculty Directory.
+  Band Director: Jane Smith. Email: jane.smith@phoenixisd.example.org. Office: (602) 555-0100.
+  Theater Director: Carlos Rivera, MFA. Reach him at crivera@phoenixisd.example.org.
+  The high school marching band performs at the State Fair every fall.
+expected_organizations:
+  - name: Phoenix Independent School District
+    state: AZ
+expected_contacts:
+  - name: Jane Smith
+    title_contains: band
+    email: jane.smith@phoenixisd.example.org
+  - name: Carlos Rivera
+    title_contains: theater
+    email: crivera@phoenixisd.example.org
