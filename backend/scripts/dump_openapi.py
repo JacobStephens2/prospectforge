@@ -2,8 +2,12 @@
 
 import json
 import sys
+from pathlib import Path
 
-from app.main import app
+# Allow running as `python scripts/dump_openapi.py` from /app.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.main import app  # noqa: E402
 
 
 def main() -> None:

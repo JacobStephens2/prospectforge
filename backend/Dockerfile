@@ -20,6 +20,7 @@ RUN pip install -r requirements.txt
 
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
 
