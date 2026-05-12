@@ -42,7 +42,11 @@ Status as of 2026-05-12:
 
 ### Why Clay didn't work
 
-*Jacob to fill in. Capture: cost, integration friction, UX mismatch, or workflow gap that made Clay wrong for Acme. Document here before Phase 4 (pilot) so a future evaluation doesn't re-litigate it.*
+Jacob evaluated Clay and rejected it because **you couldn't paste a URL and get leads from it that fit Acme's market**. The tool is general-purpose and built for sales teams who want to compose their own enrichment workflows from a large kit of blocks — powerful but bulky, with too many knobs to wrangle and direct for Acme's specific use case (educational travel: schools, group leaders, segment-tagged by band/theater/choir/etc.).
+
+ProspectForge takes the opposite stance: **pre-configured for Acme's industry and need**, with the URL-paste UX as the primary surface. The tradeoff is less flexibility — but if Morgan wants something Clay can do and ProspectForge can't, we add it deliberately, not by exposing every dial.
+
+Update this note before any future Clay revisit so a new evaluator inherits the actual rejection reasoning, not a generic "we tried it and it didn't fit."
 
 ## Sister docs
 
