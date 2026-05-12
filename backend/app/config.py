@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     redis_host: str = "redis"
     redis_port: int = 6379
 
+    # CRM Bridge (read-only sync target on the live CRM MySQL).
+    crm_db_host: str = "crm-db.acme-travel.example"
+    crm_db_port: int = 3306
+    crm_db_name: str = "crm_db"
+    crm_db_user: str = "prospectforge_readonly"
+    crm_db_password: str = ""
+
     anthropic_api_key: str = ""
     anthropic_model_default: str = "claude-sonnet-4-5"
     pf_max_cost_cents_default: int = 2000

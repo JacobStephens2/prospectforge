@@ -210,7 +210,7 @@ class Organization(Base):
     dedupe_status: Mapped[str] = mapped_column(Text, nullable=False, default="new")
     # new | possible_match | weak_match | existing_customer | suppressed | exact
     dedupe_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    crm_agency_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_agency_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -262,6 +262,7 @@ class Contact(Base):
     dedupe_status: Mapped[str] = mapped_column(Text, nullable=False, default="new")
     dedupe_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     crm_agent_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_agency_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     score_role_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     score_state_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -361,11 +362,14 @@ class ReviewAction(Base):
 
 
 class CRMAgenciesCache(Base):
-    """Mirror of crm_db.tblAgency for dedupe (spec §10)."""
+    """Mirror of crm_db.tblAgency for dedupe (spec §10).
+
+    `crm_id` is tblAgency.AgCode (varchar(10) in CRM).
+    """
 
     __tablename__ = "crm_agencies_cache"
 
-    crm_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    crm_id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     domain: Mapped[str | None] = mapped_column(Text, nullable=True)
     city: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -382,12 +386,15 @@ class CRMAgentUsersCache(Base):
     CRM's own Lead::isDuplicate() checks tblAgentUsers (not tblGroupInfo),
     so this is the canonical email-collision target — a correction we caught
     while drafting the CSV proposal that spec §10 implies but doesn't spell out.
+
+    `crm_id` is tblAgentUsers.id (int auto_increment in CRM).
+    `agency_id` is tblAgentUsers.agcode (varchar(10), links to tblAgency.AgCode).
     """
 
     __tablename__ = "crm_agent_users_cache"
 
     crm_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    agency_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agency_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     email: Mapped[str | None] = mapped_column(Text, nullable=True)
     alt_email: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_synced_at: Mapped[datetime] = mapped_column(
