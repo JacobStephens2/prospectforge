@@ -1,0 +1,15 @@
+# ProspectForge — TLS at the edge, reverse-proxy to the frontend container.
+# Installed at /etc/caddy/Caddyfile on prospect.acme-travel.example.
+#
+# Caddy auto-fetches a Let's Encrypt cert for the named host on first request
+# and renews it automatically. journald gets the access log (`log` with no
+# target = the systemd default), so `journalctl -u caddy` is the operator tail.
+
+prospect.acme-travel.example {
+    encode gzip zstd
+    log
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+}
