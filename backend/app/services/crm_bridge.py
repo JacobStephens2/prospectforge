@@ -77,21 +77,28 @@ def extract_domain(value: str | None) -> str | None:
     return host or None
 
 
-def _domain_is_customer(status: str | None) -> bool:
-    """A best-effort 'is this CRM row a current customer'. We store the
-    raw tblAgency.SalesStatus (int) as text. Per Lead status convention in
-    CRM, anything other than '0' (deleted) and high prospect codes
-    represents an active customer relationship — and importantly, any active
-    agency we already do business with should block re-outreach until a
-    human overrides. Conservative default: any non-empty, non-'0' status is
-    treated as customer.
+_INACTIVE_THRESHOLD_DAYS = 730  # 24 months — spec via Jacob 2026-05-12
 
-    TODO: get the real CRM SalesStatus enum from Riley and refine this so
-    e.g. 'prospect' vs 'customer' is distinguishable. Tracked as a follow-up.
+
+def _classify_blocking(status: str | None) -> tuple[bool, str]:
+    """Map a cache status string to (blocks_export, descriptor).
+
+    Per Jacob 2026-05-12: customer/prospect/inactive are derived from booking
+    recency, computed at sync time and stored verbatim in the cache.
+
+    Blocking policy:
+        customer → block (active relationship; sales has the seat)
+        prospect → block (already in our pipeline as a lead; would double-touch)
+        inactive → flag only (cold for 2+ years; reviewer can re-engage)
     """
-    if not status:
-        return False
-    return status not in ("0",)
+    if status == "customer":
+        return True, "customer"
+    if status == "prospect":
+        return True, "prospect (in CRM pipeline, no bookings yet)"
+    if status == "inactive":
+        return False, "inactive (no bookings in 24+ months)"
+    # Unknown / legacy value — treat conservatively to avoid duplicate outreach.
+    return True, f"unclassified ({status!r})"
 
 
 # ---------- result type ----------
@@ -128,6 +135,19 @@ def connect_crm() -> pymysql.connections.Connection:
     )
 
 
+def _derive_status(last_booking_at: datetime | None, now: datetime) -> str:
+    """Map a last_booking_at timestamp to one of {customer, inactive, prospect}.
+
+    customer: booked within INACTIVE_THRESHOLD_DAYS (24 months)
+    inactive: had bookings but the most recent is older than the threshold
+    prospect: never had a non-cancelled, group-bearing booking
+    """
+    if last_booking_at is None:
+        return "prospect"
+    age_days = (now - last_booking_at).total_seconds() / 86400.0
+    return "customer" if age_days <= _INACTIVE_THRESHOLD_DAYS else "inactive"
+
+
 def sync_agencies(
     db: Session,
     rows: Iterable[dict] | None = None,
@@ -136,8 +156,11 @@ def sync_agencies(
 ) -> int:
     """Upsert tblAgency rows into the local cache.
 
-    Either pass `rows` (for tests/fixtures) or omit both args and we'll
-    open a CRM connection ourselves. Returns count upserted.
+    Each row is expected to carry `last_booking_at` already computed (the
+    fetcher joins tblBooking to produce it). For tests/fixtures, pass rows
+    directly; the fixture is responsible for populating last_booking_at.
+
+    Returns count upserted.
     """
     if rows is None:
         rows = _fetch_agencies(crm_conn)
@@ -145,13 +168,19 @@ def sync_agencies(
     now = datetime.now(timezone.utc)
     for r in rows:
         domain = extract_domain(r.get("URL")) or extract_domain(r.get("Email"))
+        last_booking = r.get("last_booking_at")
+        if last_booking is not None and last_booking.tzinfo is None:
+            # MySQL DATETIME returns naive; assume UTC for arithmetic
+            # consistency with Postgres timestamptz columns.
+            last_booking = last_booking.replace(tzinfo=timezone.utc)
         values = {
             "crm_id": str(r["AgCode"]),
             "name": r.get("AgName") or "",
             "domain": domain,
             "city": r.get("City"),
             "state": (r.get("State") or "").strip() or None,
-            "status": str(r["SalesStatus"]) if r.get("SalesStatus") is not None else None,
+            "status": _derive_status(last_booking, now),
+            "last_booking_at": last_booking,
             "last_synced_at": now,
         }
         stmt = insert(CRMAgenciesCache).values(**values)
@@ -196,14 +225,24 @@ def sync_agent_users(
 
 
 def _fetch_agencies(conn: pymysql.connections.Connection | None) -> Iterable[dict]:
+    """Pull active agencies + their most recent non-cancelled, group-bearing
+    booking date. The LEFT JOIN ensures agencies with no bookings come back
+    (last_booking_at=NULL → prospect)."""
     owned = conn is None
     if owned:
         conn = connect_crm()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT AgCode, AgName, URL, Email, City, State, SalesStatus "
-                "FROM tblAgency WHERE Active = 1"
+                "SELECT a.AgCode, a.AgName, a.URL, a.Email, a.City, a.State, "
+                "       MAX(b.DateBooked) AS last_booking_at "
+                "FROM tblAgency a "
+                "LEFT JOIN tblBooking b "
+                "       ON b.AgCode = a.AgCode "
+                "      AND b.GroupID IS NOT NULL "
+                "      AND (b.Status IS NULL OR b.Status <> 'CX') "
+                "WHERE a.Active = 1 "
+                "GROUP BY a.AgCode, a.AgName, a.URL, a.Email, a.City, a.State"
             )
             return cur.fetchall()
     finally:
@@ -301,13 +340,12 @@ def lookup_contact_dedupe(
                 {"d": email_domain},
             ).first()
             if agency_match:
-                blocks = _domain_is_customer(agency_match.status)
+                blocks, descriptor = _classify_blocking(agency_match.status)
                 return DedupeResult(
                     status="domain_match",
                     reason=(
                         f"email domain matches CRM agency {agency_match.name!r} "
-                        f"({'customer' if blocks else 'inactive/prospect'} — "
-                        f"{'block' if blocks else 'flag'})"
+                        f"[{descriptor}] — {'block' if blocks else 'flag'}"
                     ),
                     blocks_export=blocks,
                     crm_agency_id=agency_match.crm_id,
@@ -351,13 +389,10 @@ def lookup_organization_dedupe(
             {"d": domain.lower()},
         ).first()
         if agency:
-            blocks = _domain_is_customer(agency.status)
+            blocks, descriptor = _classify_blocking(agency.status)
             return DedupeResult(
                 status="domain_match",
-                reason=(
-                    f"domain matches CRM agency {agency.name!r} "
-                    f"({'customer' if blocks else 'inactive/prospect'})"
-                ),
+                reason=f"domain matches CRM agency {agency.name!r} [{descriptor}]",
                 blocks_export=blocks,
                 crm_agency_id=agency.crm_id,
             )

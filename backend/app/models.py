@@ -365,6 +365,12 @@ class CRMAgenciesCache(Base):
     """Mirror of crm_db.tblAgency for dedupe (spec §10).
 
     `crm_id` is tblAgency.AgCode (varchar(10) in CRM).
+    `status` is derived at sync time from booking recency, not from any
+    CRM column directly — one of {customer, inactive, prospect}:
+        customer: ≥1 non-cancelled booking with GroupID in last 24 months
+        inactive: had bookings but nothing in last 24 months
+        prospect: in tblAgency but never had a booking
+    `last_booking_at` is the raw MAX(tblBooking.DateBooked) for audit.
     """
 
     __tablename__ = "crm_agencies_cache"
@@ -375,6 +381,9 @@ class CRMAgenciesCache(Base):
     city: Mapped[str | None] = mapped_column(Text, nullable=True)
     state: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_booking_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_synced_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

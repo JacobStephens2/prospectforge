@@ -15,6 +15,7 @@ The cache tables here ARE the real database.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
@@ -71,7 +72,11 @@ def cache_seed():
         db.execute(text("DELETE FROM suppressions"))
         db.commit()
 
-        # Seed two agencies + two agent users + one suppression.
+        # Seed three agencies covering all three status buckets + two agent users.
+        # last_booking_at is what drives the customer/inactive/prospect bucket;
+        # the sync derives status from it.
+        recent = datetime.now(timezone.utc) - timedelta(days=180)   # ~6mo ago → customer
+        stale = datetime.now(timezone.utc) - timedelta(days=900)    # ~30mo ago → inactive
         agencies = [
             {
                 "AgCode": "ABC123",
@@ -80,7 +85,7 @@ def cache_seed():
                 "Email": None,
                 "City": "Phoenix",
                 "State": "AZ",
-                "SalesStatus": 5,  # any non-zero → treated as customer
+                "last_booking_at": recent,
             },
             {
                 "AgCode": "XYZ999",
@@ -89,7 +94,16 @@ def cache_seed():
                 "Email": None,
                 "City": "Lincoln",
                 "State": "NE",
-                "SalesStatus": 0,  # treated as inactive
+                "last_booking_at": stale,
+            },
+            {
+                "AgCode": "PRS555",
+                "AgName": "Newville Prospect Academy",
+                "URL": "https://newvilleprospect.example.net",
+                "Email": None,
+                "City": "Newville",
+                "State": "OR",
+                "last_booking_at": None,  # never booked → prospect
             },
         ]
         agent_users = [
@@ -138,8 +152,9 @@ def cache_seed():
         db.commit()
 
         yield {
-            "phoenix_isd": agencies[0],
-            "lincoln_hs": agencies[1],
+            "phoenix_isd": agencies[0],   # customer
+            "lincoln_hs": agencies[1],    # inactive
+            "newville": agencies[2],      # prospect
             "phoenix_user": agent_users[0],
             "lincoln_user": agent_users[1],
         }
@@ -153,13 +168,20 @@ def cache_seed():
 def test_sync_agencies_upserts(cache_seed) -> None:
     db = SessionLocal()
     try:
-        count = db.query(CRMAgenciesCache).count()
-        assert count == 2
+        assert db.query(CRMAgenciesCache).count() == 3
         phoenix = db.get(CRMAgenciesCache, "ABC123")
         assert phoenix is not None
         assert phoenix.name == "Phoenix Independent School District"
         assert phoenix.domain == "phoenixisd.example.org"
         assert phoenix.state == "AZ"
+        assert phoenix.status == "customer"
+
+        lincoln = db.get(CRMAgenciesCache, "XYZ999")
+        assert lincoln.status == "inactive"
+
+        newville = db.get(CRMAgenciesCache, "PRS555")
+        assert newville.status == "prospect"
+        assert newville.last_booking_at is None
 
         # Re-running the sync with updated values must update in place.
         sync_agencies(
@@ -172,7 +194,7 @@ def test_sync_agencies_upserts(cache_seed) -> None:
                     "Email": None,
                     "City": "Phoenix",
                     "State": "AZ",
-                    "SalesStatus": 5,
+                    "last_booking_at": datetime.now(timezone.utc) - timedelta(days=30),
                 }
             ],
         )
@@ -182,7 +204,8 @@ def test_sync_agencies_upserts(cache_seed) -> None:
         phoenix = db.get(CRMAgenciesCache, "ABC123")
         assert phoenix.name == "Phoenix ISD (renamed)"
         assert phoenix.domain == "newdomain.example.org"
-        assert db.query(CRMAgenciesCache).count() == 2  # no duplicate row
+        assert phoenix.status == "customer"
+        assert db.query(CRMAgenciesCache).count() == 3  # no duplicate row
     finally:
         db.close()
 
@@ -257,7 +280,8 @@ def test_contact_dedupe_domain_match_blocks_when_customer(cache_seed) -> None:
 
 
 def test_contact_dedupe_domain_match_flags_when_inactive(cache_seed) -> None:
-    """Same domain pattern but CRM status='0' (inactive) → flag only."""
+    """Same domain pattern but the CRM agency is inactive (no bookings
+    in 2+ years) → flag only."""
     db = SessionLocal()
     try:
         r = lookup_contact_dedupe(db, email="newperson@lhsmusic.example.com")
@@ -266,6 +290,21 @@ def test_contact_dedupe_domain_match_flags_when_inactive(cache_seed) -> None:
     assert r.status == "domain_match"
     assert r.blocks_export is False  # inactive → flag, don't block
     assert r.crm_agency_id == "XYZ999"
+    assert "inactive" in r.reason
+
+
+def test_contact_dedupe_domain_match_blocks_when_prospect(cache_seed) -> None:
+    """Prospect domain: already in our pipeline as a lead, so outbound
+    would be a duplicate touch — block per the policy."""
+    db = SessionLocal()
+    try:
+        r = lookup_contact_dedupe(db, email="newperson@newvilleprospect.example.net")
+    finally:
+        db.close()
+    assert r.status == "domain_match"
+    assert r.blocks_export is True
+    assert r.crm_agency_id == "PRS555"
+    assert "prospect" in r.reason
 
 
 def test_contact_dedupe_new_when_nothing_matches(cache_seed) -> None:
