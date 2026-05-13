@@ -53,6 +53,16 @@ export default function SuppressionsPage() {
     <div className="space-y-6">
       <h1>Suppressions</h1>
 
+      <p className="text-sm text-neutral-600 max-w-3xl">
+        Suppressions are a manual block-list of email addresses and domains
+        that should never appear in outreach exports. Add an entry here when a
+        contact asks to be removed, an email hard-bounces, or you want to
+        exclude an entire organization (use <span className="font-mono">domain</span>{" "}
+        for the whole org, <span className="font-mono">email</span> for a
+        single address). New runs check this list during dedupe, and exports
+        re-check it at send time so a late addition still takes effect.
+      </p>
+
       <Card>
         <h3>Add a suppression</h3>
         <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">

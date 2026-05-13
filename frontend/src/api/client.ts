@@ -173,6 +173,8 @@ export interface RunPage {
   status: string;
   fetched_at: string | null;
   created_at: string;
+  contacts_extracted: number;
+  organizations_extracted: number;
 }
 
 export interface Contact {

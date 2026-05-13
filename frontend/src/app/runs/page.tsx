@@ -78,6 +78,7 @@ export default function RunsPage() {
               <th>Contacts</th>
               <th>Cost / Cap</th>
               <th>Created</th>
+              <th>Finished</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -109,6 +110,25 @@ export default function RunsPage() {
                 <td className="text-neutral-600 text-xs">
                   {new Date(r.created_at).toLocaleString()}
                 </td>
+                <td className="text-neutral-600 text-xs">
+                  {r.completed_at ? (
+                    <span title={`Started ${r.started_at ? new Date(r.started_at).toLocaleString() : "?"}`}>
+                      {new Date(r.completed_at).toLocaleString()}
+                      {r.started_at && (
+                        <span className="text-neutral-400">
+                          {" "}
+                          ({runDuration(r.started_at, r.completed_at)})
+                        </span>
+                      )}
+                    </span>
+                  ) : r.status === "running" && r.started_at ? (
+                    <span className="text-neutral-500">
+                      running for {runDuration(r.started_at, new Date().toISOString())}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -116,4 +136,16 @@ export default function RunsPage() {
       </Card>
     </div>
   );
+}
+
+function runDuration(start: string, end: string): string {
+  const ms = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
 }

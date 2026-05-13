@@ -16,10 +16,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.models import ProspectRun, Source, SourcePage, User
+from app.models import Contact, Organization, ProspectRun, Source, SourcePage, User
 from app.routes.auth import current_user
 
 log = logging.getLogger(__name__)
@@ -208,7 +209,8 @@ class RunPageOut(BaseModel):
     """Lightweight projection of SourcePage for live progress views.
 
     Excludes content_markdown and raw_html_path (the heavy fields) so we
-    can poll cheaply. URL + status + timing is all the UI needs.
+    can poll cheaply. URL + status + timing + per-page contact/org counts
+    is all the UI needs.
     """
 
     id: uuid.UUID
@@ -218,6 +220,8 @@ class RunPageOut(BaseModel):
     status: str
     fetched_at: datetime | None
     created_at: datetime
+    contacts_extracted: int = 0
+    organizations_extracted: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -231,8 +235,9 @@ def list_run_pages(
     """Recent SourcePage rows for a run, newest first.
 
     Surfaces the live crawl trail: what was fetched, what was blocked
-    (robots/SSRF), what 404'd. The Run detail page polls this every few
-    seconds while status='running'.
+    (robots/SSRF), what 404'd, and how many contacts/orgs each fetched
+    page produced. The Run detail page polls this every few seconds
+    while status='running'.
     """
     run_exists = db.query(ProspectRun.id).filter(ProspectRun.id == run_id).first()
     if run_exists is None:
@@ -245,4 +250,30 @@ def list_run_pages(
         .limit(limit)
         .all()
     )
-    return [RunPageOut.model_validate(r) for r in rows]
+
+    page_ids = [r.id for r in rows]
+    contact_counts: dict[uuid.UUID, int] = {}
+    org_counts: dict[uuid.UUID, int] = {}
+    if page_ids:
+        for pid, n in (
+            db.query(Contact.source_page_id, func.count(Contact.id))
+            .filter(Contact.source_page_id.in_(page_ids))
+            .group_by(Contact.source_page_id)
+            .all()
+        ):
+            contact_counts[pid] = n
+        for pid, n in (
+            db.query(Organization.source_page_id, func.count(Organization.id))
+            .filter(Organization.source_page_id.in_(page_ids))
+            .group_by(Organization.source_page_id)
+            .all()
+        ):
+            org_counts[pid] = n
+
+    out: list[RunPageOut] = []
+    for r in rows:
+        item = RunPageOut.model_validate(r)
+        item.contacts_extracted = contact_counts.get(r.id, 0)
+        item.organizations_extracted = org_counts.get(r.id, 0)
+        out.append(item)
+    return out

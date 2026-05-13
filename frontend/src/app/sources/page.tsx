@@ -18,6 +18,8 @@ export default function SourcesPage() {
   const [followExternal, setFollowExternal] = useState(false);
   const [maxExternal, setMaxExternal] = useState("20");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [created, setCreated] = useState<Source | null>(null);
 
   async function load() {
     try {
@@ -34,8 +36,10 @@ export default function SourcesPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setCreated(null);
+    setSubmitting(true);
     try {
-      await api.createSource({
+      const newSource = await api.createSource({
         name,
         url,
         segment_template: segment || null,
@@ -46,9 +50,12 @@ export default function SourcesPage() {
       setName("");
       setUrl("");
       setSegment("");
+      setCreated(newSource);
       load();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -140,8 +147,43 @@ export default function SourcesPage() {
             )}
           </div>
           <div className="md:col-span-2">
-            <Button type="submit">Create source</Button>
-            {error && <p className="text-red-700 text-sm mt-2">{error}</p>}
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Creating…" : "Create source"}
+            </Button>
+            {error && (
+              <div
+                role="alert"
+                className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+              >
+                <span className="font-medium">Couldn&apos;t create source:</span>{" "}
+                {error}
+              </div>
+            )}
+            {created && (
+              <div
+                role="status"
+                className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900 flex flex-wrap items-center gap-x-3 gap-y-1"
+              >
+                <span>
+                  <span className="font-medium">Source created:</span>{" "}
+                  {created.name}. It&apos;s ready to crawl — kick off a run
+                  whenever you&apos;re ready.
+                </span>
+                <Link
+                  href={`/runs/new?source=${created.id}`}
+                  className="underline font-medium"
+                >
+                  Start a run →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setCreated(null)}
+                  className="ml-auto text-xs text-green-800 underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
           </div>
         </form>
 

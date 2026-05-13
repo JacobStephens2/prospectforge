@@ -54,6 +54,14 @@ function NewRunForm() {
     }
   }
 
+  const costCents = Number(maxCost);
+  const costDollars = Number.isFinite(costCents)
+    ? (costCents / 100).toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+      })
+    : "$0.00";
+
   return (
     <div className="space-y-6">
       <h1>New run</h1>
@@ -105,7 +113,11 @@ function NewRunForm() {
               className="h-4 w-4"
             />
             <span>
-              I approve spending up to <strong>{maxCost}¢</strong> on this run.
+              I approve spending up to{" "}
+              <strong>
+                {maxCost}¢ ({costDollars})
+              </strong>{" "}
+              on this run.
             </span>
           </label>
 
