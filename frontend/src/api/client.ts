@@ -34,13 +34,22 @@ async function request<T>(
     throw new ApiError(401, "not authenticated");
   }
   if (!res.ok) {
-    let body: unknown = null;
+    // Read the body ONCE as text, then try to parse as JSON. The previous
+    // code did res.json() then res.text() on failure, but res.json() drains
+    // the body stream even when it throws, so the fallback failed with
+    // "body stream already read". Read text up front, JSON-parse opportunistically.
+    const text = await res.text();
+    let body: unknown = text;
     try {
-      body = await res.json();
+      body = JSON.parse(text);
     } catch {
-      body = await res.text();
+      // not JSON — keep text
     }
-    throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);
+    const detail =
+      body && typeof body === "object" && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : text || res.statusText;
+    throw new ApiError(res.status, `${res.status}: ${detail}`, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
