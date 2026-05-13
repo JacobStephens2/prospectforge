@@ -109,10 +109,13 @@ services:
   firecrawl-postgres:
     image: ghcr.io/firecrawl/nuq-postgres:latest
     restart: unless-stopped
+    # nuq-postgres ships a nuq.sql init script + hardcoded pg_cron.database_name='postgres'.
+    # Overriding POSTGRES_DB/USER breaks the init path, so we keep the upstream
+    # defaults here. The DB is only reachable from the firecrawl-* services.
     environment:
-      POSTGRES_USER: firecrawl
-      POSTGRES_PASSWORD: firecrawl-local-only
-      POSTGRES_DB: firecrawl
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     volumes:
       - firecrawl_pg_data:/var/lib/postgresql/data
     logging:
@@ -171,9 +174,9 @@ services:
       NUQ_RABBITMQ_URL: amqp://firecrawl-rabbitmq:5672
       POSTGRES_HOST: firecrawl-postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: firecrawl
-      POSTGRES_PASSWORD: firecrawl-local-only
-      POSTGRES_DB: firecrawl
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
       PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
       # ---- self-host auth: OFF (no Supabase available) ----
       USE_DB_AUTHENTICATION: "false"
