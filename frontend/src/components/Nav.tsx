@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { api, type Me } from "@/api/client";
+import { Button } from "@/components/ui/button";
 
 const items = [
   { href: "/sources", label: "Sources" },
@@ -57,13 +58,12 @@ export function Nav() {
         </div>
         {me && (
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-brand-blue font-medium">{me.full_name}</span>
-            <button
-              onClick={logout}
-              className="text-brand-blue-light hover:underline text-xs"
-            >
+            <span className="text-brand-blue font-medium hidden sm:inline">
+              {me.full_name}
+            </span>
+            <Button variant="outline" size="sm" onClick={logout}>
               Sign out
-            </button>
+            </Button>
           </div>
         )}
       </div>
