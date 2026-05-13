@@ -81,6 +81,8 @@ export const api = {
     request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }),
   startRun: (id: string) =>
     request<RunStartResult>(`/api/runs/${id}/start`, { method: "POST" }),
+  listRunPages: (id: string, limit = 50) =>
+    request<RunPage[]>(`/api/runs/${id}/pages?limit=${limit}`),
   exportRun: (id: string) =>
     request<ExportSummary>(`/api/runs/${id}/exports`, { method: "POST" }),
   listExports: (run_id: string) => request<ExportRow[]>(`/api/runs/${run_id}/exports`),
@@ -153,13 +155,22 @@ export interface Run {
 }
 
 export interface RunStartResult {
-  final_status: string;
-  pages_fetched: number;
-  pages_blocked: number;
-  organizations: number;
-  contacts: number;
-  cost_cents: number;
-  error: string | null;
+  // The /start endpoint is now fire-and-forget: it returns 202 Accepted
+  // and the background thread drives the orchestrator. Progress lives on
+  // the run row itself + the /pages endpoint.
+  accepted: boolean;
+  run_id: string;
+  status: string;
+}
+
+export interface RunPage {
+  id: string;
+  url: string;
+  canonical_url: string | null;
+  http_status: number | null;
+  status: string;
+  fetched_at: string | null;
+  created_at: string;
 }
 
 export interface Contact {

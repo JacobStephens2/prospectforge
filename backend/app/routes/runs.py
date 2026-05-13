@@ -9,6 +9,8 @@ or scheduler picks it up.
 
 from __future__ import annotations
 
+import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -16,9 +18,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.db import get_db
-from app.models import ProspectRun, Source, User
+from app.db import SessionLocal, get_db
+from app.models import ProspectRun, Source, SourcePage, User
 from app.routes.auth import current_user
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -100,39 +104,124 @@ def get_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> RunOut:
 
 
 class RunStartResult(BaseModel):
-    final_status: str
-    pages_fetched: int
-    pages_blocked: int
-    organizations: int
-    contacts: int
-    cost_cents: int
-    error: str | None
+    """Acknowledgement payload for the now-asynchronous start endpoint.
+
+    The orchestrator runs in a background thread; the actual progress is
+    visible via polling `/api/runs/{id}` and `/api/runs/{id}/pages`.
+    """
+
+    accepted: bool
+    run_id: uuid.UUID
+    status: str
 
 
-@router.post("/{run_id}/start", response_model=RunStartResult)
+def _run_in_background(run_id: uuid.UUID) -> None:
+    """Thread target: open a fresh Session and drive the run. On any error
+    we stamp the run as failed so the UI doesn't poll a stuck 'running' row
+    forever. Threads are daemon=True so a container restart kills them
+    cleanly; a re-runs queue is a follow-up (workers/run_runner.py is wired
+    for RQ).
+    """
+    # Local import: defer importing the orchestrator until the thread runs,
+    # to avoid pulling httpx + claude SDK into request-path import time.
+    from app.services.run_orchestrator import execute_run
+
+    db = SessionLocal()
+    try:
+        execute_run(db=db, run_id=run_id)
+    except Exception:  # noqa: BLE001
+        log.exception("background run %s crashed", run_id)
+        try:
+            db.rollback()
+            run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
+            if run is not None and run.status in ("pending", "running"):
+                run.status = "failed"
+                run.completed_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("failed to stamp run %s as failed", run_id)
+    finally:
+        db.close()
+
+
+@router.post(
+    "/{run_id}/start",
+    response_model=RunStartResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def start_run(
     run_id: uuid.UUID,
     _user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> RunStartResult:
-    """Drive a pending run through the full pipeline.
+    """Kick off the run in a background thread and return immediately.
 
-    Synchronous in v1 — RQ enqueue is a one-line swap (see workers/run_runner.py).
-    Returns the final summary; for long runs the response is the after-state
-    of the work, not a job acknowledgement.
+    The thread takes the run from `pending` → `running` → `completed`
+    (or `failed`/`over_budget`). Operators observe progress by polling
+    `GET /api/runs/{id}` (status, pages_crawled, contacts_extracted)
+    and `GET /api/runs/{id}/pages` (recent fetched URLs).
+
+    202 Accepted is the right semantic: the work is queued, not done.
     """
-    from app.services.run_orchestrator import execute_run
+    run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"run is in status {run.status!r}, only 'pending' runs can be started",
+        )
 
-    try:
-        summary = execute_run(db=db, run_id=run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return RunStartResult(
-        final_status=summary.final_status,
-        pages_fetched=summary.pages_fetched,
-        pages_blocked=summary.pages_blocked,
-        organizations=summary.organizations_extracted,
-        contacts=summary.contacts_extracted,
-        cost_cents=summary.cost_cents,
-        error=summary.error,
+    thread = threading.Thread(
+        target=_run_in_background,
+        args=(run_id,),
+        name=f"run-{run_id}",
+        daemon=True,
     )
+    thread.start()
+
+    return RunStartResult(accepted=True, run_id=run_id, status="running")
+
+
+class RunPageOut(BaseModel):
+    """Lightweight projection of SourcePage for live progress views.
+
+    Excludes content_markdown and raw_html_path (the heavy fields) so we
+    can poll cheaply. URL + status + timing is all the UI needs.
+    """
+
+    id: uuid.UUID
+    url: str
+    canonical_url: str | None
+    http_status: int | None
+    status: str
+    fetched_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/{run_id}/pages", response_model=list[RunPageOut])
+def list_run_pages(
+    run_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[RunPageOut]:
+    """Recent SourcePage rows for a run, newest first.
+
+    Surfaces the live crawl trail: what was fetched, what was blocked
+    (robots/SSRF), what 404'd. The Run detail page polls this every few
+    seconds while status='running'.
+    """
+    run_exists = db.query(ProspectRun.id).filter(ProspectRun.id == run_id).first()
+    if run_exists is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    rows = (
+        db.query(SourcePage)
+        .filter(SourcePage.run_id == run_id)
+        .order_by(SourcePage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [RunPageOut.model_validate(r) for r in rows]
