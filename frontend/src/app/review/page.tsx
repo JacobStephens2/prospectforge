@@ -11,7 +11,10 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { api, type Contact } from "@/api/client";
-import { Badge, Button, Card, Select } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Select } from "@/components/NativeSelect";
+import { Badge } from "@/components/Badge";
 
 function badge(s: string) {
   if (s === "approved" || s === "edited") return <Badge intent="ok">{s}</Badge>;
@@ -129,14 +132,14 @@ function ReviewInner() {
         cell: (c) => (
           <div className="flex gap-1">
             <Button
-              variant="primary"
+              variant="default"
               disabled={busy !== null}
               onClick={() => act(c.row.original, "approve")}
             >
               ✓
             </Button>
             <Button
-              variant="danger"
+              variant="destructive"
               disabled={busy !== null}
               onClick={() => act(c.row.original, "reject")}
             >

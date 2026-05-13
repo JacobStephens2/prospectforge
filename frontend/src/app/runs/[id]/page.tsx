@@ -3,7 +3,9 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Contact, type ExportSummary, type Run } from "@/api/client";
-import { Badge, Button, Card } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/Badge";
 
 export default function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -69,7 +71,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
           <Button
             onClick={start}
             disabled={busy !== null || run.status !== "pending"}
-            variant={run.status === "pending" ? "primary" : "secondary"}
+            variant={run.status === "pending" ? "default" : "secondary"}
           >
             {busy === "start" ? "Starting…" : "Start run"}
           </Button>

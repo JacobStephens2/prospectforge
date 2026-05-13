@@ -1,6 +1,10 @@
 import "../styles/globals.css";
 import type { Metadata } from "next";
 import { Nav } from "@/components/Nav";
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: "ProspectForge",
@@ -18,7 +22,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={cn("font-sans", geist.variable)}>
       <body>
         {/* Nav reads /api/auth/me itself; it renders empty user state on
             /login and /verify, which is the right UX. The middleware

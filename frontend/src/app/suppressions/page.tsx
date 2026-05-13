@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { api, type Suppression } from "@/api/client";
-import { Button, Card, Input, Label, Select } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/NativeSelect";
 
 export default function SuppressionsPage() {
   const [items, setItems] = useState<Suppression[]>([]);
@@ -107,7 +111,7 @@ export default function SuppressionsPage() {
                   {new Date(s.added_at).toLocaleString()}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <Button variant="danger" onClick={() => remove(s.id)}>
+                  <Button variant="destructive" onClick={() => remove(s.id)}>
                     Remove
                   </Button>
                 </td>

@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Run } from "@/api/client";
-import { Badge, Card, Select } from "@/components/ui";
+import { Card } from "@/components/ui/card";
+import { Select } from "@/components/NativeSelect";
+import { Badge } from "@/components/Badge";
 
 const statuses = ["", "pending", "running", "completed", "failed", "over_budget"];
 

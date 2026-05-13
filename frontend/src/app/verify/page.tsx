@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Card } from "@/components/ui";
+import { Card } from "@/components/ui/card";
 
 export default function VerifyPage() {
   return (
