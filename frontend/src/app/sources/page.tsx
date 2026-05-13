@@ -167,14 +167,15 @@ export default function SourcesPage() {
               </li>
               <li>
                 <span className="font-semibold text-foreground">Tier 2 — Firecrawl.</span>{" "}
-                A self-hosted headless browser service. Use this only for
-                sources where Tier 1 returns an empty or mostly-empty page
-                — typically a JavaScript-rendered SPA, a Cloudflare-style
-                challenge, or a site that requires session cookies. Slower
-                and resource-heavier than Tier 1, so it&apos;s feature-flagged
-                per source rather than always-on. <strong>Currently off by
-                default for MVP</strong> — pilot sources should all work on
-                Tier 1 per the build spec.
+                A self-hosted headless browser service (Playwright under the
+                hood). Use this for sources where Tier 1 returns an empty
+                or mostly-empty page — typically a JavaScript-rendered SPA,
+                a member-directory widget, or a site that requires session
+                cookies. Slower and resource-heavier than Tier 1, so opt in
+                per source rather than as a default. Firecrawl <code>/map</code>
+                is also used for URL discovery on Tier-2 sources, which
+                often surfaces directory links that a static-HTML parse
+                doesn&apos;t see.
               </li>
               <li>
                 <span className="font-semibold text-foreground">Tier 3 — Playwright fallback.</span>{" "}
