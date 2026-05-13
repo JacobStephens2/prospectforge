@@ -56,16 +56,20 @@ export function Nav() {
             );
           })}
         </div>
-        {me && (
-          <div className="flex items-center gap-3 text-sm">
+        <div className="flex items-center gap-3 text-sm">
+          {me && (
             <span className="text-brand-blue font-medium hidden sm:inline">
               {me.full_name}
             </span>
-            <Button variant="outline" size="sm" onClick={logout}>
-              Sign out
-            </Button>
-          </div>
-        )}
+          )}
+          {/* Always show Sign Out when the Nav renders. The middleware only
+              checks cookie presence, not validity — so we may be in a
+              "stale cookie" state where /api/auth/me 401s. The user still
+              needs a way to clear the cookie and get back to /login. */}
+          <Button variant="outline" size="sm" onClick={logout}>
+            Sign out
+          </Button>
+        </div>
       </div>
     </nav>
   );
