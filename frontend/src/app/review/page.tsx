@@ -112,7 +112,25 @@ function ReviewInner() {
       {
         header: "Evidence",
         accessorKey: "evidence_verified",
-        cell: (c) => badge(c.row.original.evidence_verified),
+        cell: (c) => {
+          const row = c.row.original;
+          const ex = row.evidence_excerpt || "";
+          const truncated = ex.length > 120 ? ex.slice(0, 117) + "…" : ex;
+          return (
+            <div
+              className="cursor-pointer max-w-md"
+              onClick={() => setSelected(row)}
+              title="Click to see full evidence + source URL"
+            >
+              {badge(row.evidence_verified)}
+              {ex && (
+                <p className="mt-1 text-xs italic text-muted-foreground line-clamp-2">
+                  &ldquo;{truncated}&rdquo;
+                </p>
+              )}
+            </div>
+          );
+        },
       },
       {
         header: "Score",
@@ -248,6 +266,21 @@ function ReviewInner() {
             </dd>
             <dt className="text-neutral-500">Phone</dt>
             <dd>{selected.phone ?? "—"}</dd>
+            <dt className="text-neutral-500">Source</dt>
+            <dd>
+              {selected.source_page_url ? (
+                <a
+                  href={selected.source_page_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs break-all"
+                >
+                  {selected.source_page_url}
+                </a>
+              ) : (
+                "—"
+              )}
+            </dd>
             <dt className="text-neutral-500">Evidence</dt>
             <dd>
               <div className="flex items-center gap-2">

@@ -167,6 +167,7 @@ export interface Contact {
   run_id: string;
   organization_id: string | null;
   source_page_id: string | null;
+  source_page_url: string | null;
   name: string;
   title: string | null;
   email: string | null;

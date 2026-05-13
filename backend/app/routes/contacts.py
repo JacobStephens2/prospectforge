@@ -35,6 +35,7 @@ class ContactOut(BaseModel):
     run_id: uuid.UUID
     organization_id: uuid.UUID | None
     source_page_id: uuid.UUID | None
+    source_page_url: str | None = None  # joined from source_pages for the UI
     name: str
     title: str | None
     email: str | None
@@ -60,6 +61,19 @@ class ContactOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+def _hydrate_source_url(db: Session, contact: Contact) -> ContactOut:
+    """Populate source_page_url via a single point lookup. Cheap for small
+    response sets (we already cap at 500)."""
+    out = ContactOut.model_validate(contact)
+    if contact.source_page_id:
+        from app.models import SourcePage
+
+        sp = db.get(SourcePage, contact.source_page_id)
+        if sp is not None:
+            out.source_page_url = sp.canonical_url or sp.url
+    return out
 
 
 ReviewAction_T = Literal[
@@ -109,7 +123,7 @@ def list_contacts(
     elif has_email is False:
         q = q.filter(Contact.email.is_(None))
     rows = q.offset(offset).limit(limit).all()
-    return [ContactOut.model_validate(c) for c in rows]
+    return [_hydrate_source_url(db, c) for c in rows]
 
 
 @router.get("/{contact_id}", response_model=ContactOut)
@@ -117,7 +131,7 @@ def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> Contact
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
-    return ContactOut.model_validate(contact)
+    return _hydrate_source_url(db, contact)
 
 
 @router.post(
@@ -176,4 +190,4 @@ def review_contact(
     )
     db.commit()
     db.refresh(contact)
-    return ContactOut.model_validate(contact)
+    return _hydrate_source_url(db, contact)
