@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   flexRender,
@@ -55,6 +55,15 @@ function ReviewInner() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+
+  // Scroll the detail panel into view whenever a row is opened. Without this,
+  // the panel renders below a long table and clicks looked like no-ops.
+  useEffect(() => {
+    if (selected && drawerRef.current) {
+      drawerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [selected?.id]);
 
   async function load() {
     const rows = await api.listContacts({
@@ -245,7 +254,8 @@ function ReviewInner() {
       </Card>
 
       {selected && (
-        <Card>
+        <div ref={drawerRef} className="scroll-mt-4">
+        <Card className="border-2 border-primary">
           <div className="flex items-center justify-between">
             <h3>{selected.name}</h3>
             <Button variant="ghost" onClick={() => setSelected(null)}>
@@ -304,6 +314,7 @@ function ReviewInner() {
             </dd>
           </dl>
         </Card>
+        </div>
       )}
     </div>
   );
