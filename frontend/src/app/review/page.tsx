@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   flexRender,
@@ -55,15 +55,22 @@ function ReviewInner() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const drawerRef = useRef<HTMLDivElement | null>(null);
 
-  // Scroll the detail panel into view whenever a row is opened. Without this,
-  // the panel renders below a long table and clicks looked like no-ops.
+  // ESC closes the modal + lock body scroll while it's open so the page
+  // underneath doesn't drift. Restoring on close keeps the row position.
   useEffect(() => {
-    if (selected && drawerRef.current) {
-      drawerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [selected?.id]);
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelected(null);
+    };
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [selected]);
 
   async function load() {
     const rows = await api.listContacts({
@@ -254,10 +261,19 @@ function ReviewInner() {
       </Card>
 
       {selected && (
-        <div ref={drawerRef} className="scroll-mt-4">
-        <Card className="border-2 border-primary">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="contact-detail-title"
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto"
+          onClick={(e) => {
+            // Click the backdrop (not the modal body) to close.
+            if (e.target === e.currentTarget) setSelected(null);
+          }}
+        >
+        <Card className="mt-12 w-full max-w-2xl shadow-xl">
           <div className="flex items-center justify-between">
-            <h3>{selected.name}</h3>
+            <h3 id="contact-detail-title">{selected.name}</h3>
             <Button variant="ghost" onClick={() => setSelected(null)}>
               Close
             </Button>
