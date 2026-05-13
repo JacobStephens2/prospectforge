@@ -54,6 +54,9 @@ class FetchResult:
     content_hash: str | None
     content_markdown: str | None
     page_metadata: dict[str, Any]
+    # Raw response body — kept in memory for the discovery step. Not
+    # persisted to the DB; archive.write_raw_html() handles disk persistence.
+    raw_body: bytes | None = None
     error: str | None = None
 
 
@@ -154,6 +157,7 @@ def safe_fetch(url: str, *, client: httpx.Client | None = None) -> FetchResult:
                 status="fetched",
                 content_hash=_hash_body(body),
                 content_markdown=_extract_markdown(body, content_type),
+                raw_body=body,
                 page_metadata={
                     "redirect_chain": redirect_chain,
                     "content_type": content_type,

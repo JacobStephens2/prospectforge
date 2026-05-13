@@ -60,7 +60,7 @@ from app.services.crm_bridge import (
     lookup_contact_dedupe,
     lookup_organization_dedupe,
 )
-from app.services.url_discovery import discover_same_domain_urls
+from app.services.url_discovery import discover_links
 from app.workers.crawl import HTTP_TIMEOUT_SECS, safe_fetch
 
 log = logging.getLogger(__name__)
@@ -286,41 +286,60 @@ def execute_run(
             robots=robots,
             rate_limiter=rate_limiter,
         )
-        # We don't have raw bytes through this path yet (safe_fetch decodes
-        # internally). The archive layer handles None gracefully.
-        page = _persist_page(db, run_id=run.id, result=result, raw_body=None)
+        page = _persist_page(db, run_id=run.id, result=result, raw_body=result.raw_body)
         seen_urls.add(source.url)
         seen_domains.add(urlparse(source.url).netloc.lower())
+        # After redirects, the canonical host might differ from the seed
+        # (e.g. www.northwind-old.example → northwind.example). Add the canonical host
+        # to seen_domains so same-domain discovery scopes correctly.
+        canonical_host: str | None = None
+        if result.canonical_url:
+            canonical_host = urlparse(result.canonical_url).netloc.lower()
+            if canonical_host:
+                seen_domains.add(canonical_host)
         if result.status == "fetched":
             pages_fetched += 1
         else:
             pages_blocked += 1
 
-        # ----- Step 2: discover same-domain URLs from the seed page -----
-        discovered: list[str] = []
-        if result.status == "fetched" and result.content_markdown:
-            # Discovery wants HTML; we have markdown. For shallow discovery
-            # against directory pages we re-fetch the body via the same
-            # client only to get <a href> — cheap and the SSRF guard +
-            # robots + rate limit already validated this URL once.
+        # ----- Step 2: discover URLs from the seed page -----
+        # We use the raw_body that safe_fetch already captured — no second
+        # fetch, which avoids the redirect bug (the previous re-fetch with
+        # follow_redirects=False returned a 301 and silently produced no
+        # links). Base the URL resolution on canonical_url after redirects
+        # so relative links resolve to the *served* domain.
+        same_domain_urls: list[str] = []
+        external_urls: list[str] = []
+        if result.status == "fetched" and result.raw_body:
+            base_for_discovery = result.canonical_url or source.url
             try:
-                # Note: rate_limiter.acquire already happened above; we
-                # don't want to penalize ourselves twice for the same URL
-                resp = client.get(source.url, follow_redirects=False)
-                if resp.status_code == 200:
-                    discovered = discover_same_domain_urls(
-                        base_url=source.url,
-                        html=resp.text,
-                        max_urls=max_pages - 1,
-                    )
-            except httpx.HTTPError:
-                pass
+                html_text = result.raw_body.decode("utf-8", errors="replace")
+                same_domain_urls, external_urls = discover_links(
+                    base_url=base_for_discovery,
+                    html=html_text,
+                    max_same=max_pages - 1,
+                    max_external=(
+                        source.max_external_pages if source.follow_external_links else 0
+                    ),
+                )
+                log.info(
+                    "discovery on %s → %d same-domain, %d external",
+                    base_for_discovery,
+                    len(same_domain_urls),
+                    len(external_urls),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("link discovery failed for %s: %s", base_for_discovery, exc)
 
-        # ----- Step 3: extract from the seed page itself first -----
+        # ----- Step 3: queue the seed for extraction -----
         pages_to_extract: list[SourcePage] = [page]
 
         # ----- Step 4: walk discovered URLs -----
-        for url in discovered:
+        # Same-domain first, then external. We bias toward staying on the
+        # source's site to find pagination + sub-pages, only spilling out
+        # to external members once we've exhausted that tier.
+        all_to_walk = list(same_domain_urls) + list(external_urls)
+        for url in all_to_walk:
             if url in seen_urls:
                 continue
             if len(seen_urls) >= max_pages:
@@ -342,7 +361,7 @@ def execute_run(
                 log.info("SSRF blocked %s: %s", url, exc)
                 continue
 
-            step_page = _persist_page(db, run_id=run.id, result=step, raw_body=None)
+            step_page = _persist_page(db, run_id=run.id, result=step, raw_body=step.raw_body)
             if step.status == "fetched":
                 pages_fetched += 1
                 pages_to_extract.append(step_page)

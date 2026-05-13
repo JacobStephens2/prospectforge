@@ -66,6 +66,8 @@ class Source(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     segment_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     crawl_tier: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    follow_external_links: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    max_external_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False

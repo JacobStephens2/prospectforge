@@ -118,6 +118,8 @@ export interface Source {
   url: string;
   segment_template: string | null;
   crawl_tier: number;
+  follow_external_links: boolean;
+  max_external_pages: number;
   active: boolean;
   created_by: string;
   created_at: string;

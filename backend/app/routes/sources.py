@@ -21,6 +21,8 @@ class SourceCreate(BaseModel):
     url: HttpUrl
     segment_template: str | None = Field(None, max_length=200)
     crawl_tier: int = Field(1, ge=1, le=2)
+    follow_external_links: bool = False
+    max_external_pages: int = Field(20, ge=0, le=200)
 
 
 class SourceOut(BaseModel):
@@ -29,6 +31,8 @@ class SourceOut(BaseModel):
     url: str
     segment_template: str | None
     crawl_tier: int
+    follow_external_links: bool
+    max_external_pages: int
     active: bool
     created_by: uuid.UUID
     created_at: datetime
@@ -47,6 +51,8 @@ def create_source(
         url=str(body.url),
         segment_template=body.segment_template,
         crawl_tier=body.crawl_tier,
+        follow_external_links=body.follow_external_links,
+        max_external_pages=body.max_external_pages,
         created_by=user.id,
     )
     db.add(source)

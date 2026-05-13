@@ -15,6 +15,8 @@ export default function SourcesPage() {
   const [url, setUrl] = useState("");
   const [segment, setSegment] = useState("");
   const [tier, setTier] = useState("1");
+  const [followExternal, setFollowExternal] = useState(false);
+  const [maxExternal, setMaxExternal] = useState("20");
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
@@ -38,6 +40,8 @@ export default function SourcesPage() {
         url,
         segment_template: segment || null,
         crawl_tier: Number(tier),
+        follow_external_links: followExternal,
+        max_external_pages: Number(maxExternal),
       });
       setName("");
       setUrl("");
@@ -94,6 +98,46 @@ export default function SourcesPage() {
             <p className="text-xs text-muted-foreground mt-1">
               Start with Tier 1 — try Tier 2 only if Tier 1 returns empty content.
             </p>
+          </div>
+          <div className="md:col-span-2 border-t pt-4 space-y-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={followExternal}
+                onChange={(e) => setFollowExternal(e.target.checked)}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                <span className="font-medium">Follow external links</span>
+                <span className="block text-xs text-muted-foreground mt-0.5">
+                  Enable for directory-style sources where the actual contacts
+                  live on each listed member&apos;s own site (e.g. Northwind / Global
+                  Learning, TTA). The crawler will follow off-domain
+                  <code className="mx-1">&lt;a href&gt;</code>links on the seed page
+                  up to the cap below, subject to the same SSRF guard and rate
+                  limit. Off for single-page directories where every contact is
+                  on the seed itself.
+                </span>
+              </span>
+            </label>
+            {followExternal && (
+              <div className="pl-6">
+                <Label htmlFor="maxext">Max external pages</Label>
+                <Input
+                  id="maxext"
+                  type="number"
+                  min={0}
+                  max={200}
+                  value={maxExternal}
+                  onChange={(e) => setMaxExternal(e.target.value)}
+                  className="w-32"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Hard cap on off-domain pages this source will crawl per run.
+                  At ~1¢/page, 20 ≈ 20¢; 100 ≈ $1.00.
+                </p>
+              </div>
+            )}
           </div>
           <div className="md:col-span-2">
             <Button type="submit">Create source</Button>

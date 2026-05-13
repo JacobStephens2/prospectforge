@@ -47,30 +47,57 @@ def discover_same_domain_urls(
 ) -> list[str]:
     """Return up to max_urls absolute URLs found in `html`, restricted to the
     same hostname as base_url. Order-preserving dedupe."""
+    same, _ext = discover_links(base_url=base_url, html=html, max_same=max_urls, max_external=0)
+    return same
+
+
+def discover_links(
+    *,
+    base_url: str,
+    html: str,
+    max_same: int = 30,
+    max_external: int = 0,
+) -> tuple[list[str], list[str]]:
+    """Split discovered <a href> targets into (same-domain, external) lists.
+
+    Both lists are order-preserving and deduped. External links are useful
+    for directory-style sources (Northwind/Global Learning's member-schools
+    listing, for example) where the actual contacts live on each member's
+    own site. Caller decides whether to follow externals — `max_external=0`
+    keeps the historical same-domain-only behavior.
+    """
     base = urlparse(base_url)
     if not base.netloc:
-        return []
+        return [], []
 
     parser = _LinkExtractor()
     parser.feed(html)
     parser.close()
 
-    seen: dict[str, None] = {}
+    base_host = base.netloc.lower()
+    same_seen: dict[str, None] = {}
+    ext_seen: dict[str, None] = {}
+
     for href in parser.links:
-        # Strip fragment, skip mailto:/tel:/javascript:.
         if href.startswith(("mailto:", "tel:", "javascript:", "#")):
             continue
         joined = urljoin(base_url, href).split("#", 1)[0]
         target = urlparse(joined)
         if target.scheme not in ("http", "https"):
             continue
-        if target.netloc.lower() != base.netloc.lower():
+        if not target.netloc:
             continue
         if _SKIP_EXTENSIONS.search(target.path):
             continue
-        if joined in seen:
-            continue
-        seen[joined] = None
-        if len(seen) >= max_urls:
+
+        if target.netloc.lower() == base_host:
+            if joined not in same_seen and len(same_seen) < max_same:
+                same_seen[joined] = None
+        else:
+            if joined not in ext_seen and len(ext_seen) < max_external:
+                ext_seen[joined] = None
+
+        if len(same_seen) >= max_same and len(ext_seen) >= max_external:
             break
-    return list(seen.keys())
+
+    return list(same_seen.keys()), list(ext_seen.keys())
