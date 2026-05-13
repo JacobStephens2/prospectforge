@@ -62,6 +62,9 @@ from app.services.crm_bridge import (
 )
 from app.services.url_discovery import discover_links
 from app.workers.crawl import HTTP_TIMEOUT_SECS, safe_fetch
+from app.services.firecrawl_client import map_site as firecrawl_map_site
+from app.services.firecrawl_client import scrape as firecrawl_scrape
+from app.services.ssrf_guard import validate_target_url
 
 log = logging.getLogger(__name__)
 
@@ -99,10 +102,20 @@ def _safe_fetch_with_governance(
     client: httpx.Client,
     robots: RobotsCache,
     rate_limiter: DomainRateLimiter,
+    crawl_tier: int = 1,
 ):
-    """Apply robots + rate limit, then delegate to safe_fetch. Returns the
-    same FetchResult shape — robots-blocked is recorded as a synthetic
-    'blocked_robots' status so SourcePage rows still capture the attempt."""
+    """Apply robots + SSRF + rate limit, then dispatch to the right engine.
+
+    Tier 1: httpx + trafilatura via safe_fetch (the SSRF guard runs inside
+    safe_fetch as it follows redirects manually).
+
+    Tier 2: self-hosted Firecrawl. Firecrawl runs Playwright internally
+    and does its own redirect following, so we cannot re-validate each hop
+    — instead we run our SSRF guard against the seed URL up-front. That's
+    the same trust model as our outbound HTTP client's DNS resolution, but
+    relies on Firecrawl not chasing redirects into private IP space (it
+    doesn't, by default).
+    """
     allowed, reason = robots.is_allowed(url, client=client)
     if not allowed:
         from app.workers.crawl import FetchResult  # local import to avoid cycle
@@ -118,6 +131,11 @@ def _safe_fetch_with_governance(
             error=reason,
         )
     rate_limiter.acquire(url)
+    if crawl_tier == 2:
+        # SSRF guard before handing the URL to Firecrawl. The guard raises
+        # SSRFBlocked which the caller handles uniformly.
+        validate_target_url(url)
+        return firecrawl_scrape(url)
     return safe_fetch(url, client=client)
 
 
@@ -279,12 +297,15 @@ def execute_run(
     final_status = "completed"
 
     try:
+        crawl_tier = source.crawl_tier or 1
+
         # ----- Step 1: fetch the seed URL -----
         result = _safe_fetch_with_governance(
             url=source.url,
             client=client,
             robots=robots,
             rate_limiter=rate_limiter,
+            crawl_tier=crawl_tier,
         )
         page = _persist_page(db, run_id=run.id, result=result, raw_body=result.raw_body)
         seen_urls.add(source.url)
@@ -303,14 +324,32 @@ def execute_run(
             pages_blocked += 1
 
         # ----- Step 2: discover URLs from the seed page -----
-        # We use the raw_body that safe_fetch already captured — no second
-        # fetch, which avoids the redirect bug (the previous re-fetch with
-        # follow_redirects=False returned a 301 and silently produced no
-        # links). Base the URL resolution on canonical_url after redirects
-        # so relative links resolve to the *served* domain.
+        # Tier 1 parses the raw HTML we already captured (avoids a 2nd
+        # fetch + the redirect bug we fixed earlier). Tier 2 delegates to
+        # Firecrawl /v2/map, which can enumerate URLs from JS-rendered
+        # directory pages that BeautifulSoup wouldn't see.
         same_domain_urls: list[str] = []
         external_urls: list[str] = []
-        if result.status == "fetched" and result.raw_body:
+        if crawl_tier == 2:
+            base_for_discovery = result.canonical_url or source.url
+            try:
+                mapped = firecrawl_map_site(base_for_discovery, limit=max_pages)
+                seed_host = urlparse(base_for_discovery).netloc.lower()
+                for u in mapped:
+                    host = urlparse(u).netloc.lower()
+                    if host == seed_host:
+                        same_domain_urls.append(u)
+                    elif source.follow_external_links and len(external_urls) < source.max_external_pages:
+                        external_urls.append(u)
+                log.info(
+                    "firecrawl /map on %s → %d same-domain, %d external",
+                    base_for_discovery,
+                    len(same_domain_urls),
+                    len(external_urls),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("firecrawl map failed for %s: %s", base_for_discovery, exc)
+        elif result.status == "fetched" and result.raw_body:
             base_for_discovery = result.canonical_url or source.url
             try:
                 html_text = result.raw_body.decode("utf-8", errors="replace")
@@ -356,6 +395,7 @@ def execute_run(
                     client=client,
                     robots=robots,
                     rate_limiter=rate_limiter,
+                    crawl_tier=crawl_tier,
                 )
             except SSRFBlocked as exc:
                 log.info("SSRF blocked %s: %s", url, exc)

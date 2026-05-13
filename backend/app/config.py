@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     pf_max_cost_cents_default: int = 2000
     pf_firecrawl_enabled: bool = False
 
+    # Firecrawl self-hosted endpoint. Reachable from the backend container
+    # over the docker network as `http://firecrawl-api:3002`. No auth header
+    # required when USE_DB_AUTHENTICATION=false (see docker-compose.yml).
+    firecrawl_base_url: str = "http://firecrawl-api:3002"
+    firecrawl_request_timeout_secs: float = 120.0
+
     # Comma-separated CIDRs / IPs to add to the SSRF denylist on top of the
     # always-blocked ranges (private, loopback, link-local, metadata).
     # Defaulted to the Acme internal IPs we know we never want to scrape.

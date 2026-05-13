@@ -70,7 +70,140 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
 
+  # ----- Firecrawl tier-2 crawl engine (spec §6.1) -------------------------
+  # Self-hosted Firecrawl: API + Playwright-based browser worker + its own
+  # Redis/RabbitMQ/Postgres backing services. Lifted from the upstream
+  # docker-compose.yaml at github.com/firecrawl/firecrawl and renamed to
+  # avoid colliding with our existing redis/postgres services.
+  #
+  # USE_DB_AUTHENTICATION=false leaves the API open inside the docker
+  # network; nothing publishes to the host. Backend reaches it as
+  # `http://firecrawl-api:3002`. Don't add a host port unless you want it
+  # exposed publicly — there's no built-in auth in self-host mode.
+
+  firecrawl-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["redis-server", "--bind", "0.0.0.0"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  firecrawl-rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  firecrawl-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:latest
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: firecrawl
+      POSTGRES_PASSWORD: firecrawl-local-only
+      POSTGRES_DB: firecrawl
+    volumes:
+      - firecrawl_pg_data:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:latest
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      BLOCK_MEDIA: "true"          # images/fonts/CSS not needed for text extraction
+      MAX_CONCURRENT_PAGES: "5"
+    # Chromium needs shared memory; without this we get random tab crashes.
+    shm_size: "2gb"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    cpus: 2.0
+    mem_limit: 4g
+    memswap_limit: 4g
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  firecrawl-api:
+    image: ghcr.io/firecrawl/firecrawl:latest
+    restart: unless-stopped
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_healthy
+      firecrawl-postgres:
+        condition: service_started
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      INTERNAL_PORT: "3002"
+      EXTRACT_WORKER_PORT: "3004"
+      WORKER_PORT: "3005"
+      HARNESS_STARTUP_TIMEOUT_MS: "60000"
+      ENV: local
+      # ---- backing services (renamed from upstream defaults) ----
+      REDIS_URL: redis://firecrawl-redis:6379
+      REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
+      NUQ_RABBITMQ_URL: amqp://firecrawl-rabbitmq:5672
+      POSTGRES_HOST: firecrawl-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: firecrawl
+      POSTGRES_PASSWORD: firecrawl-local-only
+      POSTGRES_DB: firecrawl
+      PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+      # ---- self-host auth: OFF (no Supabase available) ----
+      USE_DB_AUTHENTICATION: "false"
+      BULL_AUTH_KEY: "${FIRECRAWL_BULL_AUTH_KEY:-changeme-local-only}"
+      # ---- concurrency tuned for an 8-core / 32GB box shared with other svc ----
+      NUM_WORKERS_PER_QUEUE: "4"
+      CRAWL_CONCURRENT_REQUESTS: "5"
+      MAX_CONCURRENT_JOBS: "3"
+      BROWSER_POOL_SIZE: "3"
+      LOGGING_LEVEL: info
+    # The api image embeds an internal "harness" that spawns the workers
+    # alongside the api; --start-docker is the upstream-default invocation.
+    command: ["node", "dist/src/harness.js", "--start-docker"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cpus: 4.0
+    mem_limit: 6g
+    memswap_limit: 6g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pg_data:
   redis_data:
   pf_state:
+  firecrawl_pg_data:
