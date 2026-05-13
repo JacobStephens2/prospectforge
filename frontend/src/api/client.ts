@@ -139,6 +139,8 @@ export interface Source {
 export interface Run {
   id: string;
   source_id: string;
+  source_name: string | null;
+  source_crawl_tier: number | null;
   status: string;
   max_cost_cents: number;
   estimated_cost_cents: number | null;

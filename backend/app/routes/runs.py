@@ -36,6 +36,8 @@ class RunCreate(BaseModel):
 class RunOut(BaseModel):
     id: uuid.UUID
     source_id: uuid.UUID
+    source_name: str | None = None  # joined from sources for the runs list
+    source_crawl_tier: int | None = None  # joined from sources for the runs list
     status: str
     max_cost_cents: int
     estimated_cost_cents: int | None
@@ -51,6 +53,25 @@ class RunOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+def _runs_to_out(db: Session, runs: list[ProspectRun]) -> list[RunOut]:
+    """Hydrate a list of runs with their Source name + crawl_tier. One
+    batched lookup keyed by source_id — O(unique sources), not O(runs)."""
+    source_ids = {r.source_id for r in runs}
+    sources = (
+        db.query(Source).filter(Source.id.in_(source_ids)).all() if source_ids else []
+    )
+    by_id = {s.id: s for s in sources}
+    out: list[RunOut] = []
+    for r in runs:
+        item = RunOut.model_validate(r)
+        s = by_id.get(r.source_id)
+        if s is not None:
+            item.source_name = s.name
+            item.source_crawl_tier = s.crawl_tier
+        out.append(item)
+    return out
 
 
 @router.post("", response_model=RunOut, status_code=status.HTTP_201_CREATED)
@@ -77,7 +98,7 @@ def create_run(
     db.add(run)
     db.commit()
     db.refresh(run)
-    return RunOut.model_validate(run)
+    return _runs_to_out(db, [run])[0]
 
 
 @router.get("", response_model=list[RunOut])
@@ -92,7 +113,7 @@ def list_runs(
         q = q.filter(ProspectRun.source_id == source_id)
     if status_filter is not None:
         q = q.filter(ProspectRun.status == status_filter)
-    return [RunOut.model_validate(r) for r in q.limit(limit).all()]
+    return _runs_to_out(db, q.limit(limit).all())
 
 
 @router.get("/{run_id}", response_model=RunOut)
@@ -100,7 +121,7 @@ def get_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> RunOut:
     run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return RunOut.model_validate(run)
+    return _runs_to_out(db, [run])[0]
 
 
 class RunStartResult(BaseModel):

@@ -9,6 +9,16 @@ import { Badge } from "@/components/Badge";
 
 const statuses = ["", "pending", "running", "completed", "failed", "over_budget"];
 
+function tierIntent(t: number): "ok" | "warn" | "bad" | "info" | "neutral" {
+  // Tier 1 = direct httpx (cheapest, default); tier 2 = Firecrawl
+  // (paid, JS rendering); tier 3 = Playwright (heaviest). Color hints at
+  // cost / complexity so operators can scan the list.
+  if (t === 1) return "ok";
+  if (t === 2) return "info";
+  if (t === 3) return "warn";
+  return "neutral";
+}
+
 function statusBadge(s: string) {
   switch (s) {
     case "completed":
@@ -61,6 +71,8 @@ export default function RunsPage() {
           <thead>
             <tr className="text-left text-xs text-neutral-500 uppercase">
               <th className="py-2">Run</th>
+              <th>Source</th>
+              <th>Tier</th>
               <th>Status</th>
               <th>Pages</th>
               <th>Contacts</th>
@@ -75,6 +87,16 @@ export default function RunsPage() {
                   <Link href={`/runs/${r.id}`} className="font-mono text-xs">
                     {r.id.slice(0, 8)}…
                   </Link>
+                </td>
+                <td className="text-xs">{r.source_name ?? "—"}</td>
+                <td>
+                  {r.source_crawl_tier !== null ? (
+                    <Badge intent={tierIntent(r.source_crawl_tier)}>
+                      T{r.source_crawl_tier}
+                    </Badge>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td>{statusBadge(r.status)}</td>
                 <td>{r.pages_crawled}</td>
