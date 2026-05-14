@@ -14,7 +14,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -122,7 +122,7 @@ def delete_run(
     run_id: uuid.UUID,
     _user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> None:
+) -> Response:
     """Delete a run and everything attached to it.
 
     Cascades take care of source_pages, organizations, contacts, run_jobs,
@@ -164,6 +164,8 @@ def delete_run(
                 shutil.rmtree(path)
             except OSError as exc:
                 log.warning("failed to clear %s: %s", path, exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{run_id}", response_model=RunOut)
