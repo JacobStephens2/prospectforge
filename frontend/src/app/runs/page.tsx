@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Run } from "@/api/client";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/NativeSelect";
 import { Badge } from "@/components/Badge";
@@ -38,6 +39,7 @@ function statusBadge(s: string) {
 export default function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [filter, setFilter] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   async function load() {
     setRuns(await api.listRuns(filter || undefined));
@@ -45,6 +47,22 @@ export default function RunsPage() {
   useEffect(() => {
     load();
   }, [filter]);
+
+  async function deleteRun(r: Run) {
+    // Cheap, explicit, and reversible-by-rerunning. Skip a fancy dialog;
+    // browser confirm is fine for an admin-only screen.
+    const msg = `Delete run ${r.id.slice(0, 8)}… (${r.source_name ?? "?"}, ${r.contacts_extracted} contacts)?\n\nThis also deletes its source pages, contacts, exports, and archived HTML. Not undoable.`;
+    if (!window.confirm(msg)) return;
+    setDeletingId(r.id);
+    try {
+      await api.deleteRun(r.id);
+      await load();
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -79,6 +97,7 @@ export default function RunsPage() {
               <th>Cost / Cap</th>
               <th>Created</th>
               <th>Finished</th>
+              <th aria-label="Actions"></th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -128,6 +147,17 @@ export default function RunsPage() {
                   ) : (
                     "—"
                   )}
+                </td>
+                <td className="text-right">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={deletingId !== null || r.status === "running"}
+                    onClick={() => deleteRun(r)}
+                    title={r.status === "running" ? "Wait for the run to finish" : "Delete this run"}
+                  >
+                    {deletingId === r.id ? "…" : "Delete"}
+                  </Button>
                 </td>
               </tr>
             ))}

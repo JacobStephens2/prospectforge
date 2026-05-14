@@ -117,6 +117,55 @@ def list_runs(
     return _runs_to_out(db, q.limit(limit).all())
 
 
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_run(
+    run_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Delete a run and everything attached to it.
+
+    Cascades take care of source_pages, organizations, contacts, run_jobs,
+    review_actions (via contacts). Exports don't cascade from prospect_runs
+    by FK, so we delete them explicitly first; their export_rows children
+    cascade off the export row.
+
+    Also clears the on-disk artifacts:
+      /var/lib/prospectforge/exports/<run_id>/   (CSVs)
+      /var/lib/prospectforge/archive/<run_id>/   (raw HTML)
+
+    Refuses to delete a `running` run because the orchestrator thread still
+    holds a Session against those rows — caller should wait for it to
+    terminate (or restart the backend container).
+    """
+    import shutil
+    from pathlib import Path
+    from app.models import Export
+
+    run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="run is currently running; wait for it to finish before deleting",
+        )
+
+    db.query(Export).filter(Export.run_id == run_id).delete(synchronize_session=False)
+    db.delete(run)
+    db.commit()
+
+    # Best-effort filesystem cleanup. We swallow OSError so a stale
+    # permission glitch can't block the database delete from succeeding.
+    for root in ("/var/lib/prospectforge/exports", "/var/lib/prospectforge/archive"):
+        path = Path(root) / str(run_id)
+        if path.exists():
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                log.warning("failed to clear %s: %s", path, exc)
+
+
 @router.get("/{run_id}", response_model=RunOut)
 def get_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> RunOut:
     run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()

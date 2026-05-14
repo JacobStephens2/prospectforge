@@ -81,6 +81,8 @@ export const api = {
     request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }),
   startRun: (id: string) =>
     request<RunStartResult>(`/api/runs/${id}/start`, { method: "POST" }),
+  deleteRun: (id: string) =>
+    request<void>(`/api/runs/${id}`, { method: "DELETE" }),
   listRunPages: (id: string, limit = 50) =>
     request<RunPage[]>(`/api/runs/${id}/pages?limit=${limit}`),
   exportRun: (id: string) =>
