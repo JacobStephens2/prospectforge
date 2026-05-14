@@ -55,6 +55,8 @@ function ReviewInner() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // ESC closes the modal + lock body scroll while it's open so the page
   // underneath doesn't drift. Restoring on close keeps the row position.
@@ -98,18 +100,50 @@ function ReviewInner() {
     }
   }
 
+  async function exportApprovedCsv() {
+    setExportError(null);
+    setExporting(true);
+    try {
+      const rows = await api.listContacts({
+        run_id: runId || undefined,
+        review_status: "approved",
+        dedupe_status: dedupeStatus || undefined,
+        limit: 500,
+      });
+      if (rows.length === 0) {
+        setExportError(
+          "No approved contacts match the current run/dedupe filter — nothing to export.",
+        );
+        return;
+      }
+      const csv = buildCsv(rows);
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const suffix = runId ? `run-${runId.slice(0, 8)}-` : "";
+      downloadCsv(csv, `approved-contacts-${suffix}${stamp}.csv`);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const cols = useMemo<ColumnDef<Contact>[]>(
     () => [
       {
         header: "Name",
         accessorKey: "name",
         cell: (c) => (
-          <button
-            className="text-left underline-offset-2 hover:underline"
-            onClick={() => setSelected(c.row.original)}
-          >
-            {c.row.original.name}
-          </button>
+          <div className="flex flex-col gap-0.5">
+            <button
+              className="text-left underline-offset-2 hover:underline"
+              onClick={() => setSelected(c.row.original)}
+            >
+              {c.row.original.name}
+            </button>
+            {c.row.original.previously_exported && (
+              <Badge intent="info">previously exported</Badge>
+            )}
+          </div>
         ),
       },
       { header: "Title", accessorKey: "title" },
@@ -197,9 +231,17 @@ function ReviewInner() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1>Review queue</h1>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="secondary"
+            onClick={exportApprovedCsv}
+            disabled={exporting}
+            title="Download all approved contacts that match the current run and dedupe filters as a CSV"
+          >
+            {exporting ? "Exporting…" : "Export approved as CSV"}
+          </Button>
           <Select value={reviewStatus} onChange={(e) => setReviewStatus(e.target.value)}>
             <option value="">(any review)</option>
             <option value="pending">pending</option>
@@ -220,6 +262,9 @@ function ReviewInner() {
           </Select>
         </div>
       </div>
+      {exportError && (
+        <p className="text-sm text-red-700">{exportError}</p>
+      )}
 
       <Card className="overflow-x-auto p-0">
         <table className="w-full text-sm">
@@ -328,10 +373,89 @@ function ReviewInner() {
                 <p className="mt-1 text-xs text-neutral-600">{selected.dedupe_reason}</p>
               )}
             </dd>
+            <dt className="text-neutral-500">Export history</dt>
+            <dd>
+              {selected.previously_exported ? (
+                <div className="flex items-center gap-2">
+                  <Badge intent="info">previously exported</Badge>
+                  <span className="text-xs text-neutral-600">
+                    A prior export already emitted this contact (matched by
+                    contact_id or normalized email). Re-export will be
+                    skipped unless a reviewer explicitly overrides.
+                  </span>
+                </div>
+              ) : (
+                <span className="text-xs text-neutral-500">
+                  Not previously exported.
+                </span>
+              )}
+            </dd>
           </dl>
         </Card>
         </div>
       )}
     </div>
   );
+}
+
+function csvEscape(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function buildCsv(rows: Contact[]): string {
+  const headers = [
+    "name",
+    "title",
+    "email",
+    "alt_email",
+    "email_confidence",
+    "phone",
+    "segment_tag",
+    "review_status",
+    "dedupe_status",
+    "evidence_verified",
+    "evidence_excerpt",
+    "source_page_url",
+    "run_id",
+    "created_at",
+  ];
+  const lines = [headers.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.name,
+        r.title,
+        r.email,
+        r.alt_email,
+        r.email_confidence,
+        r.phone,
+        r.segment_tag,
+        r.review_status,
+        r.dedupe_status,
+        r.evidence_verified,
+        r.evidence_excerpt,
+        r.source_page_url,
+        r.run_id,
+        r.created_at,
+      ]
+        .map(csvEscape)
+        .join(","),
+    );
+  }
+  return lines.join("\r\n");
+}
+
+function downloadCsv(csv: string, filename: string): void {
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

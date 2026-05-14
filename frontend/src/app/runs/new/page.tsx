@@ -99,9 +99,12 @@ function NewRunForm() {
               required
             />
             <p className="text-xs text-neutral-600 mt-1">
-              Hard cap; the extraction worker halts the run if cumulative spend
-              would exceed this. ~1¢/page at current Sonnet 4.5 pricing with
-              prompt caching warm.
+              Hard cap on Anthropic API spend. Only the contact-extraction
+              step (Sonnet 4.5) costs money — ~1¢/page with prompt caching
+              warm. Crawling is free regardless of tier (httpx and the
+              self-hosted Firecrawl both run on this server), so the cap only
+              bounds the LLM bill. The orchestrator halts the run as soon as
+              cumulative extraction spend would exceed this.
             </p>
           </div>
 

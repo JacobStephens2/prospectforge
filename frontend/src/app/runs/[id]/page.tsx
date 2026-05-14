@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { api, type ExportSummary, type Run, type RunPage } from "@/api/client";
+import { api, type Contact, type ExportSummary, type Run, type RunPage } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/Badge";
@@ -16,6 +16,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
   const [run, setRun] = useState<Run | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [pages, setPages] = useState<RunPage[]>([]);
+  const [contactList, setContactList] = useState<Contact[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastExport, setLastExport] = useState<ExportSummary | null>(null);
@@ -32,6 +33,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
       by[c.review_status] = (by[c.review_status] ?? 0) + 1;
     }
     setCounts(by);
+    setContactList(contacts);
     setPages(recentPages);
   }
 
@@ -129,7 +131,13 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <Stat label="Status" value={run.status} />
           <Stat label="Pages crawled" value={String(run.pages_crawled)} />
-          <Stat label="Contacts" value={String(run.contacts_extracted)} />
+          {run.contacts_extracted > 0 ? (
+            <Link href={`/review?run_id=${id}`} className="block group" title="Open review queue for this run">
+              <Stat label="Contacts" value={String(run.contacts_extracted)} accent />
+            </Link>
+          ) : (
+            <Stat label="Contacts" value={String(run.contacts_extracted)} />
+          )}
           <Stat
             label="Cost / cap"
             value={`${run.cost_cents}¢ / ${run.max_cost_cents}¢`}
@@ -249,7 +257,14 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
       </Card>
 
       <Card>
-        <h3>Leads found, awaiting review ({totalReview})</h3>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h3>Leads found, awaiting review ({totalReview})</h3>
+          {totalReview > 0 && (
+            <Link href={`/review?run_id=${id}`}>
+              <Button>Review</Button>
+            </Link>
+          )}
+        </div>
         <p className="mt-1 text-sm text-neutral-600 max-w-prose">
           Every contact the extractor pulled from this run is shown below,
           grouped by review status. Click any badge to jump into the review
@@ -292,6 +307,68 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
             </p>
           )}
         </div>
+        {contactList.length > 0 && (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 text-xs uppercase text-neutral-500">
+                <tr>
+                  <th className="text-left px-3 py-2">Name</th>
+                  <th className="text-left px-3 py-2">Title</th>
+                  <th className="text-left px-3 py-2">Email</th>
+                  <th className="text-left px-3 py-2">Status</th>
+                  <th className="text-left px-3 py-2">Found on</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {contactList.slice(0, 50).map((c) => (
+                  <tr key={c.id} className="hover:bg-neutral-50">
+                    <td className="px-3 py-2 font-medium">
+                      <Link
+                        href={`/review?run_id=${id}&review_status=${c.review_status}`}
+                        className="underline underline-offset-2"
+                        title="Open this contact in the review queue"
+                      >
+                        {c.name}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-neutral-700">{c.title ?? "—"}</td>
+                    <td className="px-3 py-2 text-neutral-700 text-xs">
+                      {c.email ?? <span className="text-neutral-400">none</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge intent={badgeIntent(c.review_status)}>
+                        {c.review_status}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {c.source_page_url ? (
+                        <a
+                          href={c.source_page_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-neutral-600 underline underline-offset-2 truncate inline-block max-w-[20rem]"
+                          title={c.source_page_url}
+                        >
+                          {c.source_page_url}
+                        </a>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {contactList.length > 50 && (
+              <p className="mt-2 text-xs text-neutral-500">
+                Showing 50 of {contactList.length}.{" "}
+                <Link href={`/review?run_id=${id}`} className="underline">
+                  Open the full review queue →
+                </Link>
+              </p>
+            )}
+          </div>
+        )}
       </Card>
 
       {lastExport && (
@@ -333,11 +410,19 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
   return (
     <div>
       <div className="text-xs uppercase text-neutral-500">{label}</div>
-      <div className="text-base font-medium">{value}</div>
+      <div
+        className={
+          accent
+            ? "text-base font-medium underline underline-offset-2 group-hover:text-blue-700"
+            : "text-base font-medium"
+        }
+      >
+        {value}
+      </div>
     </div>
   );
 }

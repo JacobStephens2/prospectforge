@@ -18,10 +18,11 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Contact, ReviewAction, User
+from app.models import Contact, ExportRow, ReviewAction, User
 from app.routes.auth import current_user
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
@@ -58,22 +59,73 @@ class ContactOut(BaseModel):
     score_has_direct_email: bool
     score_has_phone: bool
     score_has_travel_signal: bool
+    previously_exported: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-def _hydrate_source_url(db: Session, contact: Contact) -> ContactOut:
-    """Populate source_page_url via a single point lookup. Cheap for small
-    response sets (we already cap at 500)."""
-    out = ContactOut.model_validate(contact)
-    if contact.source_page_id:
-        from app.models import SourcePage
+def _previously_exported_ids(db: Session, contacts: list[Contact]) -> set[uuid.UUID]:
+    """One batched lookup per page-of-rows. Returns the set of contact.ids
+    that already appear in export_rows (by contact_id OR normalized email).
 
-        sp = db.get(SourcePage, contact.source_page_id)
-        if sp is not None:
-            out.source_page_url = sp.canonical_url or sp.url
+    Per spec §12.2: the review UI surfaces a 'Previously exported' badge so
+    a reviewer can see at a glance that approving will hit the duplicate
+    gate in export_service. Lookup is O(unique emails+ids), not O(rows).
+    """
+    if not contacts:
+        return set()
+    ids = [c.id for c in contacts]
+    emails = [c.email.lower() for c in contacts if c.email]
+
+    by_id: set[uuid.UUID] = set()
+    if ids:
+        by_id.update(
+            r[0] for r in db.execute(
+                select(ExportRow.contact_id).where(ExportRow.contact_id.in_(ids))
+            ).all()
+        )
+
+    by_email_contact_ids: set[uuid.UUID] = set()
+    if emails:
+        emailed_set = set(
+            r[0] for r in db.execute(
+                select(ExportRow.exported_email).where(ExportRow.exported_email.in_(emails))
+            ).all()
+        )
+        for c in contacts:
+            if c.email and c.email.lower() in emailed_set:
+                by_email_contact_ids.add(c.id)
+
+    return by_id | by_email_contact_ids
+
+
+def _hydrate(db: Session, contacts: list[Contact]) -> list[ContactOut]:
+    """Hydrate a batch of contacts with source_page_url and previously_exported."""
+    from app.models import SourcePage
+
+    sp_ids = {c.source_page_id for c in contacts if c.source_page_id}
+    sp_by_id: dict[uuid.UUID, SourcePage] = {}
+    if sp_ids:
+        for sp in db.query(SourcePage).filter(SourcePage.id.in_(sp_ids)).all():
+            sp_by_id[sp.id] = sp
+
+    prior = _previously_exported_ids(db, contacts)
+
+    out: list[ContactOut] = []
+    for c in contacts:
+        item = ContactOut.model_validate(c)
+        if c.source_page_id:
+            sp = sp_by_id.get(c.source_page_id)
+            if sp is not None:
+                item.source_page_url = sp.canonical_url or sp.url
+        item.previously_exported = c.id in prior
+        out.append(item)
     return out
+
+
+def _hydrate_one(db: Session, contact: Contact) -> ContactOut:
+    return _hydrate(db, [contact])[0]
 
 
 ReviewAction_T = Literal[
@@ -123,7 +175,7 @@ def list_contacts(
     elif has_email is False:
         q = q.filter(Contact.email.is_(None))
     rows = q.offset(offset).limit(limit).all()
-    return [_hydrate_source_url(db, c) for c in rows]
+    return _hydrate(db, rows)
 
 
 @router.get("/{contact_id}", response_model=ContactOut)
@@ -131,7 +183,7 @@ def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> Contact
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
-    return _hydrate_source_url(db, contact)
+    return _hydrate_one(db, contact)
 
 
 @router.post(
@@ -190,4 +242,4 @@ def review_contact(
     )
     db.commit()
     db.refresh(contact)
-    return _hydrate_source_url(db, contact)
+    return _hydrate_one(db, contact)

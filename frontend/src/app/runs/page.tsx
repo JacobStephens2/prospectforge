@@ -120,7 +120,19 @@ export default function RunsPage() {
                 </td>
                 <td>{statusBadge(r.status)}</td>
                 <td>{r.pages_crawled}</td>
-                <td>{r.contacts_extracted}</td>
+                <td>
+                  {r.contacts_extracted > 0 ? (
+                    <Link
+                      href={`/review?run_id=${r.id}`}
+                      className="underline underline-offset-2"
+                      title="Open the review queue for this run"
+                    >
+                      {r.contacts_extracted}
+                    </Link>
+                  ) : (
+                    r.contacts_extracted
+                  )}
+                </td>
                 <td>
                   <code>
                     {r.cost_cents}¢ / {r.max_cost_cents}¢

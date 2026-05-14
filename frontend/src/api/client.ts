@@ -207,6 +207,7 @@ export interface Contact {
   score_has_direct_email: boolean;
   score_has_phone: boolean;
   score_has_travel_signal: boolean;
+  previously_exported: boolean;
   created_at: string;
 }
 
