@@ -25,6 +25,9 @@ export default function SourcesPage() {
   const [editDraft, setEditDraft] = useState<Partial<Source>>({});
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  // Default to active-only so Delete actually removes the row from view.
+  // Operator can flip this to recover a paused/deleted source.
+  const [showInactive, setShowInactive] = useState(false);
 
   function startEdit(s: Source) {
     setEditError(null);
@@ -71,7 +74,7 @@ export default function SourcesPage() {
 
   async function load() {
     try {
-      setSources(await api.listSources({ activeOnly: false }));
+      setSources(await api.listSources({ activeOnly: !showInactive }));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -79,7 +82,9 @@ export default function SourcesPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // load() depends on showInactive — re-fetch when the toggle flips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showInactive]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -285,10 +290,27 @@ export default function SourcesPage() {
       </Card>
 
       <Card>
-        <h3>All sources ({sources.length})</h3>
+        <div className="flex items-center justify-between gap-3">
+          <h3>
+            {showInactive ? "All sources" : "Active sources"} ({sources.length})
+          </h3>
+          <label className="flex items-center gap-2 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Show inactive
+          </label>
+        </div>
         <div className="mt-3 divide-y">
           {sources.length === 0 && (
-            <p className="text-sm text-neutral-600 py-2">No sources yet.</p>
+            <p className="text-sm text-neutral-600 py-2">
+              {showInactive
+                ? "No sources yet."
+                : "No active sources. Toggle 'Show inactive' to see deleted/paused sources."}
+            </p>
           )}
           {sources.map((s) =>
             editingId === s.id ? (
