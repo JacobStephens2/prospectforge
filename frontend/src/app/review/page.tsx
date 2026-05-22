@@ -51,6 +51,9 @@ function ReviewInner() {
   const [runId, setRunId] = useState(initialRun);
   const [reviewStatus, setReviewStatus] = useState(initialStatus);
   const [dedupeStatus, setDedupeStatus] = useState("");
+  // "reachable" = has email OR phone. Default on — most of the time you
+  // don't want to see contacts you can't actually reach.
+  const [contactInfo, setContactInfo] = useState<"any" | "reachable" | "none">("reachable");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
@@ -79,13 +82,15 @@ function ReviewInner() {
       run_id: runId || undefined,
       review_status: reviewStatus || undefined,
       dedupe_status: dedupeStatus || undefined,
+      has_contact_info:
+        contactInfo === "reachable" ? true : contactInfo === "none" ? false : undefined,
       limit: 200,
     });
     setContacts(rows);
   }
   useEffect(() => {
     load();
-  }, [runId, reviewStatus, dedupeStatus]);
+  }, [runId, reviewStatus, dedupeStatus, contactInfo]);
 
   async function act(c: Contact, action: string) {
     setBusy(c.id);
@@ -108,6 +113,8 @@ function ReviewInner() {
         run_id: runId || undefined,
         review_status: "approved",
         dedupe_status: dedupeStatus || undefined,
+        has_contact_info:
+          contactInfo === "reachable" ? true : contactInfo === "none" ? false : undefined,
         limit: 500,
       });
       if (rows.length === 0) {
@@ -148,6 +155,15 @@ function ReviewInner() {
       },
       { header: "Title", accessorKey: "title" },
       { header: "Email", accessorKey: "email" },
+      {
+        header: "Phone",
+        accessorKey: "phone",
+        cell: (c) => (
+          <span className="font-mono text-xs">
+            {c.row.original.phone ?? <span className="text-neutral-400">—</span>}
+          </span>
+        ),
+      },
       { header: "Segment", accessorKey: "segment_tag" },
       {
         header: "Review",
@@ -183,7 +199,41 @@ function ReviewInner() {
         },
       },
       {
-        header: "Score",
+        header: () => (
+          <span className="group relative inline-flex items-center gap-1 cursor-help">
+            Score <span className="text-neutral-400">?</span>
+            <div
+              role="tooltip"
+              className="pointer-events-none absolute right-0 top-full z-50 mt-1 hidden w-80 rounded-md border border-neutral-200 bg-white p-3 text-left text-xs font-normal text-neutral-700 shadow-lg group-hover:block"
+            >
+              <p className="mb-2 font-semibold text-neutral-900">
+                Sum of 5 signals the scorer checks for each contact
+              </p>
+              <ul className="space-y-1.5">
+                <li>
+                  <span className="font-medium text-neutral-900">Role match</span>{" "}
+                  — title looks like an educator/decision-maker we sell to.
+                </li>
+                <li>
+                  <span className="font-medium text-neutral-900">State match</span>{" "}
+                  — organization state matches a target state.
+                </li>
+                <li>
+                  <span className="font-medium text-neutral-900">Direct email</span>{" "}
+                  — a real address (not a pattern guess).
+                </li>
+                <li>
+                  <span className="font-medium text-neutral-900">Phone</span>{" "}
+                  — a phone number was extracted.
+                </li>
+                <li>
+                  <span className="font-medium text-neutral-900">Travel signal</span>{" "}
+                  — the source mentions trips, tours, performance travel, etc.
+                </li>
+              </ul>
+            </div>
+          </span>
+        ),
         id: "score",
         accessorFn: (c) =>
           [
@@ -193,6 +243,7 @@ function ReviewInner() {
             c.score_has_phone,
             c.score_has_travel_signal,
           ].filter(Boolean).length,
+        cell: (c) => <ScoreCell contact={c.row.original} />,
       },
       {
         header: "Actions",
@@ -232,7 +283,21 @@ function ReviewInner() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1>Review queue</h1>
+        <div className="flex items-baseline gap-3">
+          <h1>Review queue</h1>
+          <span className="text-sm text-neutral-600">
+            <strong>{contacts.length}</strong> matching{" "}
+            {contacts.length === 1 ? "contact" : "contacts"}
+            {contacts.length === 200 && (
+              <span
+                className="text-neutral-400"
+                title="The backend caps each request at 200 rows. Narrow the filters to see beyond this slice."
+              >
+                {" "}(capped)
+              </span>
+            )}
+          </span>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="secondary"
@@ -249,6 +314,15 @@ function ReviewInner() {
             <option value="rejected">rejected</option>
             <option value="edited">edited</option>
             <option value="needs_review">needs_review</option>
+          </Select>
+          <Select
+            value={contactInfo}
+            onChange={(e) => setContactInfo(e.target.value as "any" | "reachable" | "none")}
+            title="Filter rows by whether the contact has an email or a phone number"
+          >
+            <option value="reachable">Has email or phone</option>
+            <option value="any">(any contact info)</option>
+            <option value="none">No contact info</option>
           </Select>
           <Select value={dedupeStatus} onChange={(e) => setDedupeStatus(e.target.value)}>
             <option value="">(any dedupe)</option>
@@ -458,4 +532,67 @@ function downloadCsv(csv: string, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+
+function ScoreCell({ contact }: { contact: Contact }) {
+  const signals = [
+    {
+      key: "role",
+      label: "Role match",
+      value: contact.score_role_match,
+      explain:
+        "Title looks like a role we sell to (band director, theater director, head of school, etc.) — not a student/parent/admin assistant.",
+    },
+    {
+      key: "state",
+      label: "State match",
+      value: contact.score_state_match,
+      explain:
+        "Organization state is on the target-state list for outbound. Off means the org is outside our priority territory.",
+    },
+    {
+      key: "direct_email",
+      label: "Direct email",
+      value: contact.score_has_direct_email,
+      explain:
+        "A real email address was extracted from the page (not a pattern-guess that still needs BDR verification).",
+    },
+    {
+      key: "phone",
+      label: "Phone",
+      value: contact.score_has_phone,
+      explain: "A phone number was extracted alongside the contact.",
+    },
+    {
+      key: "travel_signal",
+      label: "Travel signal",
+      value: contact.score_has_travel_signal,
+      explain:
+        "The source page mentions tours, trips, performance travel, exchange programs, or similar \"this person plans travel\" hints.",
+    },
+  ];
+  const total = signals.filter((s) => s.value).length;
+  // Tooltip text — readable in the native title bubble even if we add a
+  // fancier popover later.
+  const tip = signals
+    .map((s) => `${s.value ? "\u2713" : "\u2717"} ${s.label} — ${s.explain}`)
+    .join("\n\n");
+  return (
+    <div className="inline-flex items-center gap-2" title={tip}>
+      <span className="font-medium tabular-nums">{total}/5</span>
+      <div className="flex gap-0.5">
+        {signals.map((s) => (
+          <span
+            key={s.key}
+            className={`inline-block h-2 w-2 rounded-full ${
+              s.value ? "bg-emerald-500" : "bg-neutral-200"
+            }`}
+            title={`${s.label}: ${s.value ? "yes" : "no"} — ${s.explain}`}
+            aria-label={`${s.label}: ${s.value ? "yes" : "no"}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }

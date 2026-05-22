@@ -12,6 +12,7 @@ const items = [
   { href: "/runs", label: "Runs" },
   { href: "/review", label: "Review" },
   { href: "/suppressions", label: "Suppressions" },
+  { href: "/admin/memory", label: "Memory" },
 ];
 
 export function Nav() {

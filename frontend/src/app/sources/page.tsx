@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/NativeSelect";
+import { Badge } from "@/components/Badge";
 
 export default function SourcesPage() {
   const [sources, setSources] = useState<Source[]>([]);
@@ -20,10 +21,57 @@ export default function SourcesPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<Source | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Partial<Source>>({});
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  function startEdit(s: Source) {
+    setEditError(null);
+    setEditingId(s.id);
+    setEditDraft({
+      name: s.name,
+      url: s.url,
+      segment_template: s.segment_template,
+      crawl_tier: s.crawl_tier,
+      follow_external_links: s.follow_external_links,
+      max_external_pages: s.max_external_pages,
+      active: s.active,
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft({});
+    setEditError(null);
+  }
+
+  async function saveEdit(s: Source) {
+    if (editDraft.url && editDraft.url !== s.url) {
+      if (
+        !confirm(
+          `You changed the seed URL of "${s.name}" from\n  ${s.url}\nto\n  ${editDraft.url}\n\nThis effectively makes it a different source. Past runs still point at the old URL but the next run will crawl the new one. Proceed?`,
+        )
+      ) {
+        return;
+      }
+    }
+    setEditError(null);
+    setEditBusy(true);
+    try {
+      await api.updateSource(s.id, editDraft);
+      cancelEdit();
+      load();
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setEditBusy(false);
+    }
+  }
 
   async function load() {
     try {
-      setSources(await api.listSources());
+      setSources(await api.listSources({ activeOnly: false }));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -134,14 +182,14 @@ export default function SourcesPage() {
                   id="maxext"
                   type="number"
                   min={0}
-                  max={200}
+                  max={1000}
                   value={maxExternal}
                   onChange={(e) => setMaxExternal(e.target.value)}
                   className="w-32"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   Hard cap on off-domain pages this source will crawl per run.
-                  At ~1¢/page, 20 ≈ 20¢; 100 ≈ $1.00.
+                  At ~1¢/page, 20 ≈ 20¢; 100 ≈ $1.00; 1000 ≈ $10.00.
                 </p>
               </div>
             )}
@@ -242,19 +290,205 @@ export default function SourcesPage() {
           {sources.length === 0 && (
             <p className="text-sm text-neutral-600 py-2">No sources yet.</p>
           )}
-          {sources.map((s) => (
-            <div key={s.id} className="py-2 flex items-center justify-between">
-              <div>
-                <div className="font-medium">{s.name}</div>
-                <div className="text-xs text-neutral-600">{s.url}</div>
+          {sources.map((s) =>
+            editingId === s.id ? (
+              <div key={s.id} className="py-3 space-y-3 bg-amber-50/40 -mx-4 px-4">
+                <div className="text-xs uppercase tracking-wide text-amber-900 font-medium">
+                  Editing source
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor={`edit-name-${s.id}`}>Name</Label>
+                    <Input
+                      id={`edit-name-${s.id}`}
+                      value={editDraft.name ?? ""}
+                      onChange={(e) =>
+                        setEditDraft((d) => ({ ...d, name: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor={`edit-url-${s.id}`}>URL</Label>
+                    <Input
+                      id={`edit-url-${s.id}`}
+                      type="url"
+                      value={editDraft.url ?? ""}
+                      onChange={(e) =>
+                        setEditDraft((d) => ({ ...d, url: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor={`edit-seg-${s.id}`}>Segment template</Label>
+                    <Input
+                      id={`edit-seg-${s.id}`}
+                      value={editDraft.segment_template ?? ""}
+                      onChange={(e) =>
+                        setEditDraft((d) => ({
+                          ...d,
+                          segment_template: e.target.value || null,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor={`edit-tier-${s.id}`}>Crawl tier</Label>
+                    <Select
+                      id={`edit-tier-${s.id}`}
+                      value={String(editDraft.crawl_tier ?? 1)}
+                      onChange={(e) =>
+                        setEditDraft((d) => ({
+                          ...d,
+                          crawl_tier: Number(e.target.value),
+                        }))
+                      }
+                    >
+                      <option value="1">1 — httpx + trafilatura</option>
+                      <option value="2">2 — Firecrawl</option>
+                    </Select>
+                  </div>
+                  <div className="md:col-span-2 space-y-2 border-t pt-3">
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.follow_external_links ?? false}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({
+                            ...d,
+                            follow_external_links: e.target.checked,
+                          }))
+                        }
+                        className="mt-0.5 h-4 w-4"
+                      />
+                      <span>
+                        <span className="font-medium">Follow external links</span>
+                        <span className="block text-xs text-muted-foreground mt-0.5">
+                          Crawl off-domain pages linked from the seed (member
+                          directory style). Capped by &ldquo;max external
+                          pages&rdquo;.
+                        </span>
+                      </span>
+                    </label>
+                    {editDraft.follow_external_links && (
+                      <div className="pl-6">
+                        <Label htmlFor={`edit-maxext-${s.id}`}>
+                          Max external pages
+                        </Label>
+                        <Input
+                          id={`edit-maxext-${s.id}`}
+                          type="number"
+                          min={0}
+                          max={1000}
+                          value={editDraft.max_external_pages ?? 20}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              max_external_pages: Number(e.target.value),
+                            }))
+                          }
+                          className="w-32"
+                        />
+                      </div>
+                    )}
+                    <label className="flex items-start gap-2 text-sm pt-1">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.active ?? true}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, active: e.target.checked }))
+                        }
+                        className="mt-0.5 h-4 w-4"
+                      />
+                      <span>
+                        <span className="font-medium">Active</span>
+                        <span className="block text-xs text-muted-foreground mt-0.5">
+                          Inactive sources are hidden from the default list.
+                          Uncheck to pause without deleting; past runs stay
+                          intact either way.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <Button onClick={() => saveEdit(s)} disabled={editBusy}>
+                    {editBusy ? "Saving…" : "Save changes"}
+                  </Button>
+                  <Button variant="secondary" onClick={cancelEdit} disabled={editBusy}>
+                    Cancel
+                  </Button>
+                  {editError && (
+                    <span className="text-sm text-red-700">{editError}</span>
+                  )}
+                </div>
               </div>
-              <Link href={`/runs/new?source=${s.id}`}>
-                <Button variant="secondary">New run</Button>
-              </Link>
-            </div>
-          ))}
+            ) : (
+              <div key={s.id} className="py-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium truncate">{s.name}</span>
+                    <span title={tierTitle(s.crawl_tier)}>
+                      <Badge intent={tierIntent(s.crawl_tier)}>
+                        Tier {s.crawl_tier}
+                      </Badge>
+                    </span>
+                    {!s.active && (
+                      <span title="Inactive — hidden from the default list">
+                        <Badge intent="warn">inactive</Badge>
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-neutral-600 truncate">{s.url}</div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button variant="secondary" onClick={() => startEdit(s)}>
+                    Edit
+                  </Button>
+                  <Link href={`/runs/new?source=${s.id}`}>
+                    <Button variant="secondary">New run</Button>
+                  </Link>
+                  <Button
+                    variant="destructive"
+                    onClick={async () => {
+                      if (
+                        !confirm(
+                          `Delete source "${s.name}"? It will be hidden from this list. Past runs and their contacts stay intact.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        await api.deleteSource(s.id);
+                        load();
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ),
+          )}
         </div>
       </Card>
     </div>
   );
+}
+
+
+function tierIntent(t: number): "ok" | "warn" | "bad" | "info" | "neutral" {
+  // Same color mapping as /runs so the operator builds one mental model.
+  if (t === 1) return "ok";
+  if (t === 2) return "info";
+  if (t === 3) return "warn";
+  return "neutral";
+}
+
+function tierTitle(t: number): string {
+  if (t === 1) return "Tier 1 — httpx + trafilatura (default, fastest)";
+  if (t === 2) return "Tier 2 — Firecrawl (self-hosted, JS rendering)";
+  if (t === 3) return "Tier 3 — Playwright fallback (deferred to v1.1)";
+  return `Tier ${t}`;
 }

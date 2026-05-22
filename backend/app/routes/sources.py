@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,19 @@ class SourceCreate(BaseModel):
     segment_template: str | None = Field(None, max_length=200)
     crawl_tier: int = Field(1, ge=1, le=2)
     follow_external_links: bool = False
-    max_external_pages: int = Field(20, ge=0, le=200)
+    max_external_pages: int = Field(20, ge=0, le=1000)
+
+
+class SourceUpdate(BaseModel):
+    """All fields optional — only the supplied ones are applied."""
+
+    name: str | None = Field(None, min_length=1, max_length=200)
+    url: HttpUrl | None = None
+    segment_template: str | None = Field(None, max_length=200)
+    crawl_tier: int | None = Field(None, ge=1, le=2)
+    follow_external_links: bool | None = None
+    max_external_pages: int | None = Field(None, ge=0, le=1000)
+    active: bool | None = None
 
 
 class SourceOut(BaseModel):
@@ -78,3 +90,46 @@ def get_source(source_id: uuid.UUID, db: Session = Depends(get_db)) -> SourceOut
     if source is None:
         raise HTTPException(status_code=404, detail="source not found")
     return SourceOut.model_validate(source)
+
+
+@router.patch("/{source_id}", response_model=SourceOut)
+def update_source(
+    source_id: uuid.UUID,
+    body: SourceUpdate,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SourceOut:
+    """Partial-update a Source. Only fields present in the body are applied.
+
+    URL edits are allowed but conceptually move the source to a new seed —
+    the frontend should warn before submitting.
+    """
+    source = db.query(Source).filter(Source.id == source_id).first()
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+
+    payload = body.model_dump(exclude_unset=True)
+    if "url" in payload and payload["url"] is not None:
+        payload["url"] = str(payload["url"])
+    for key, value in payload.items():
+        setattr(source, key, value)
+    db.commit()
+    db.refresh(source)
+    return SourceOut.model_validate(source)
+
+
+@router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_source(
+    source_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    # Soft-delete: flip `active` off so the source disappears from the default
+    # list view but historical runs that reference it still resolve.
+    source = db.query(Source).filter(Source.id == source_id).first()
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    if source.active:
+        source.active = False
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

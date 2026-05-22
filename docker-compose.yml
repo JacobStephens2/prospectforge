@@ -55,6 +55,9 @@ services:
       # match spec §4.2; on prospect we'll bind-mount /var/lib/prospectforge
       # later for backup integration.
       - pf_state:/var/lib/prospectforge
+      # Host-side memory log so /admin/memory can show usage over time
+      # without bringing the backend into the host cron job. Read-only.
+      - /var/log/prospectforge_memlog.csv:/var/log/prospectforge_memlog.csv:ro
     # Code is baked into the image; for live-reload dev, mount ./backend:/app
     # and override CMD to `uvicorn --reload`.
 
@@ -137,9 +140,9 @@ services:
       nofile:
         soft: 65535
         hard: 65535
-    cpus: 2.0
-    mem_limit: 4g
-    memswap_limit: 4g
+    cpus: 1.0
+    mem_limit: 2g
+    memswap_limit: 2g
     tmpfs:
       - /tmp/.cache:noexec,nosuid,size=1g
     logging:
@@ -196,9 +199,9 @@ services:
         hard: 65535
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    cpus: 4.0
-    mem_limit: 6g
-    memswap_limit: 6g
+    cpus: 1.5
+    mem_limit: 3g
+    memswap_limit: 3g
     logging:
       driver: "json-file"
       options:

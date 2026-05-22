@@ -117,6 +117,30 @@ def list_runs(
     return _runs_to_out(db, q.limit(limit).all())
 
 
+class RunCounts(BaseModel):
+    """Run population summary for the /runs header.
+
+    `total` is the entire prospect_runs table; `by_status` lets the UI show
+    a quick by-status breakdown without re-querying once per status.
+    """
+
+    total: int
+    by_status: dict[str, int]
+
+
+@router.get("/counts", response_model=RunCounts)
+def run_counts(db: Session = Depends(get_db)) -> RunCounts:
+    from sqlalchemy import func as _func
+
+    total = db.query(_func.count(ProspectRun.id)).scalar() or 0
+    rows = (
+        db.query(ProspectRun.status, _func.count(ProspectRun.id))
+        .group_by(ProspectRun.status)
+        .all()
+    )
+    return RunCounts(total=total, by_status={s: int(n) for s, n in rows})
+
+
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_run(
     run_id: uuid.UUID,
@@ -273,6 +297,7 @@ class RunPageOut(BaseModel):
     created_at: datetime
     contacts_extracted: int = 0
     organizations_extracted: int = 0
+    error: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -326,5 +351,8 @@ def list_run_pages(
         item = RunPageOut.model_validate(r)
         item.contacts_extracted = contact_counts.get(r.id, 0)
         item.organizations_extracted = org_counts.get(r.id, 0)
+        meta = r.page_metadata or {}
+        err = meta.get("error") if isinstance(meta, dict) else None
+        item.error = err if isinstance(err, str) else None
         out.append(item)
     return out

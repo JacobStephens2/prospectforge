@@ -159,6 +159,10 @@ def list_contacts(
         description="new | possible_match | weak_match | existing_customer | suppressed | exact | domain_match",
     ),
     has_email: bool | None = None,
+    has_contact_info: bool | None = Query(
+        None,
+        description="True — require email OR phone (reachable). False — only contacts missing both.",
+    ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -174,6 +178,10 @@ def list_contacts(
         q = q.filter(Contact.email.isnot(None))
     elif has_email is False:
         q = q.filter(Contact.email.is_(None))
+    if has_contact_info is True:
+        q = q.filter((Contact.email.isnot(None)) | (Contact.phone.isnot(None)))
+    elif has_contact_info is False:
+        q = q.filter(Contact.email.is_(None) & Contact.phone.is_(None))
     rows = q.offset(offset).limit(limit).all()
     return _hydrate(db, rows)
 

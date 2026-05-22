@@ -11,7 +11,7 @@ behind an RQ enqueue is a thin wrapper (workers/run_runner.py).
 
 Steps:
   1. Discover URLs from the seed URL (same-domain shallow walk)
-  2. Apply per-run caps: 500 pages, 30 unique domains (spec §6.5)
+  2. Apply per-run caps: 1500 pages, 500 unique domains (spec §6.5)
   3. For each URL:
        a. robots.txt check (politeness, log+skip on Disallow)
        b. domain rate limit (2 req/sec)
@@ -61,7 +61,7 @@ from app.services.crm_bridge import (
     lookup_organization_dedupe,
 )
 from app.services.url_discovery import discover_links
-from app.workers.crawl import HTTP_TIMEOUT_SECS, safe_fetch
+from app.workers.crawl import HTTP_TIMEOUT_SECS, _metadata_with_error, safe_fetch
 from app.services.firecrawl_client import map_site as firecrawl_map_site
 from app.services.firecrawl_client import scrape as firecrawl_scrape
 from app.services.ssrf_guard import validate_target_url
@@ -70,8 +70,8 @@ log = logging.getLogger(__name__)
 
 
 # Run-level caps per spec §6.5.
-MAX_PAGES_PER_RUN = 500
-MAX_DOMAINS_PER_RUN = 30
+MAX_PAGES_PER_RUN = 1500
+MAX_DOMAINS_PER_RUN = 500
 ARCHIVE_ROOT = "/var/lib/prospectforge/archive"
 
 
@@ -159,7 +159,7 @@ def _persist_page(
         status=result.status,
         content_hash=result.content_hash,
         content_markdown=result.content_markdown,
-        page_metadata=result.page_metadata,
+        page_metadata=_metadata_with_error(result.page_metadata, result.error),
         fetched_at=datetime.now(timezone.utc) if result.status == "fetched" else None,
     )
     db.add(page)
@@ -183,6 +183,7 @@ def _persist_page(
             body=raw_body,
         )
         db.flush()
+    db.commit()
     return page
 
 
@@ -407,6 +408,8 @@ def execute_run(
                 pages_to_extract.append(step_page)
             else:
                 pages_blocked += 1
+            run.pages_crawled = pages_fetched
+            db.commit()
 
         run.pages_crawled = pages_fetched
         db.commit()

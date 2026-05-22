@@ -40,13 +40,83 @@ export default function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [filter, setFilter] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
 
   async function load() {
-    setRuns(await api.listRuns(filter || undefined));
+    const [fresh, counts] = await Promise.all([
+      api.listRuns(filter || undefined),
+      api.runCounts(),
+    ]);
+    setRuns(fresh);
+    setTotalCount(counts.total);
+    setStatusCounts(counts.by_status);
+    // Prune selections for rows that no longer exist (e.g. just deleted
+    // or filtered out) so the bulk bar doesn't claim phantom rows.
+    setSelectedIds((prev) => {
+      const stillThere = new Set(fresh.map((r) => r.id));
+      const pruned = new Set<string>();
+      for (const id of prev) if (stillThere.has(id)) pruned.add(id);
+      return pruned;
+    });
   }
   useEffect(() => {
     load();
   }, [filter]);
+
+  function isSelectable(r: Run): boolean {
+    return r.status !== "running";
+  }
+
+  function toggleOne(id: string, on: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAll(on: boolean) {
+    setSelectedIds(() => {
+      if (!on) return new Set();
+      return new Set(runs.filter(isSelectable).map((r) => r.id));
+    });
+  }
+
+  async function deleteSelected() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const msg =
+      `Delete ${ids.length} run${ids.length === 1 ? "" : "s"}?
+
+` +
+      "This also deletes their source pages, contacts, exports, and archived HTML. Not undoable.";
+    if (!window.confirm(msg)) return;
+    setBulkError(null);
+    setBulkBusy(true);
+    // Sequential delete so the first failure is obvious and we don't
+    // dogpile the backend with parallel CASCADE work for big runs.
+    const failed: { id: string; message: string }[] = [];
+    for (const id of ids) {
+      try {
+        await api.deleteRun(id);
+      } catch (e) {
+        failed.push({ id, message: (e as Error).message });
+      }
+    }
+    if (failed.length > 0) {
+      setBulkError(
+        `Deleted ${ids.length - failed.length} of ${ids.length}. Failed: ` +
+          failed.map((f) => `${f.id.slice(0, 8)}… (${f.message})`).join("; "),
+      );
+    }
+    setBulkBusy(false);
+    await load();
+  }
 
   async function deleteRun(r: Run) {
     // Cheap, explicit, and reversible-by-rerunning. Skip a fancy dialog;
@@ -66,8 +136,34 @@ export default function RunsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1>Runs</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-baseline gap-3">
+          <h1>Runs</h1>
+          {totalCount !== null && (
+            <span className="text-sm text-neutral-600">
+              {filter ? (
+                <>
+                  Showing <strong>{runs.length}</strong>{" "}
+                  <code className="text-xs">{filter}</code> of{" "}
+                  <strong>{totalCount}</strong> total
+                </>
+              ) : (
+                <>
+                  <strong>{totalCount}</strong> total
+                  {Object.keys(statusCounts).length > 1 && (
+                    <span className="text-neutral-500">
+                      {" "}
+                      ({Object.entries(statusCounts)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([s, n]) => `${n} ${s}`)
+                        .join(", ")})
+                    </span>
+                  )}
+                </>
+              )}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-neutral-600">Filter status:</span>
           <Select value={filter} onChange={(e) => setFilter(e.target.value)}>
@@ -81,6 +177,32 @@ export default function RunsPage() {
         </div>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+          <span className="font-medium text-amber-900">
+            {selectedIds.size} selected
+          </span>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={deleteSelected}
+            disabled={bulkBusy}
+          >
+            {bulkBusy ? "Deleting…" : `Delete ${selectedIds.size} run${selectedIds.size === 1 ? "" : "s"}`}
+          </Button>
+          <button
+            type="button"
+            onClick={() => toggleAll(false)}
+            className="text-xs text-amber-900 underline"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+      {bulkError && (
+        <p className="text-sm text-red-700">{bulkError}</p>
+      )}
+
       <Card>
         {runs.length === 0 && (
           <p className="text-sm text-neutral-600">No runs match.</p>
@@ -88,6 +210,25 @@ export default function RunsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-neutral-500 uppercase">
+              <th className="py-2 px-3 w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Select all eligible runs"
+                  className="h-4 w-4"
+                  checked={
+                    runs.filter(isSelectable).length > 0 &&
+                    runs.filter(isSelectable).every((r) => selectedIds.has(r.id))
+                  }
+                  ref={(el) => {
+                    if (!el) return;
+                    const sel = runs.filter(isSelectable);
+                    const allSelected = sel.length > 0 && sel.every((r) => selectedIds.has(r.id));
+                    const someSelected = sel.some((r) => selectedIds.has(r.id));
+                    el.indeterminate = someSelected && !allSelected;
+                  }}
+                  onChange={(e) => toggleAll(e.target.checked)}
+                />
+              </th>
               <th className="py-2">Run</th>
               <th>Source</th>
               <th>Tier</th>
@@ -102,7 +243,18 @@ export default function RunsPage() {
           </thead>
           <tbody className="divide-y">
             {runs.map((r) => (
-              <tr key={r.id} className="hover:bg-neutral-50">
+              <tr key={r.id} className={`hover:bg-neutral-50 ${selectedIds.has(r.id) ? "bg-amber-50/60" : ""}`}>
+                <td className="py-2 px-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select run ${r.id.slice(0, 8)}`}
+                    className="h-4 w-4"
+                    checked={selectedIds.has(r.id)}
+                    disabled={!isSelectable(r)}
+                    title={isSelectable(r) ? "Select this run" : "Can't select a running run"}
+                    onChange={(e) => toggleOne(r.id, e.target.checked)}
+                  />
+                </td>
                 <td className="py-2">
                   <Link href={`/runs/${r.id}`} className="font-mono text-xs">
                     {r.id.slice(0, 8)}…

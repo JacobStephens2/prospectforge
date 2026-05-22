@@ -38,8 +38,17 @@ from app.models import SourcePage
 from app.services.ssrf_guard import SSRFBlocked, validate_target_url
 
 MAX_REDIRECTS = 5
-HTTP_TIMEOUT_SECS = 15.0
+HTTP_TIMEOUT_SECS = 60.0
 USER_AGENT = "ProspectForgeBot/0.1 (+https://acme-travel.example/prospectforge)"
+
+
+def _metadata_with_error(metadata: dict | None, error: str | None) -> dict | None:
+    if not error:
+        return metadata
+    merged = dict(metadata or {})
+    merged["error"] = error
+    return merged
+
 
 
 @dataclass
@@ -201,7 +210,7 @@ def crawl_url(run_id: str, url: str) -> dict[str, Any]:
             status=result.status,
             content_hash=result.content_hash,
             content_markdown=result.content_markdown,
-            page_metadata=result.page_metadata,
+            page_metadata=_metadata_with_error(result.page_metadata, result.error),
             fetched_at=datetime.now(timezone.utc) if result.status == "fetched" else None,
         )
         db.add(page)

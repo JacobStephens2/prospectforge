@@ -54,6 +54,7 @@ function NewRunForm() {
     }
   }
 
+  const selectedSource = sources.find((s) => s.id === sourceId);
   const costCents = Number(maxCost);
   const costDollars = Number.isFinite(costCents)
     ? (costCents / 100).toLocaleString("en-US", {
@@ -85,6 +86,22 @@ function NewRunForm() {
                 </option>
               ))}
             </Select>
+            {selectedSource && (
+              <p className="text-xs text-neutral-600 mt-1">
+                Tier {selectedSource.crawl_tier} —{" "}
+                {selectedSource.crawl_tier === 2
+                  ? "Firecrawl (headless browser)"
+                  : "httpx + trafilatura"}
+                {selectedSource.follow_external_links ? (
+                  <>
+                    {" "}· follows external links, up to{" "}
+                    <strong>{selectedSource.max_external_pages}</strong> off-domain pages.
+                  </>
+                ) : (
+                  <> · seed page only (no external link following).</>
+                )}
+              </p>
+            )}
           </div>
 
           <div>

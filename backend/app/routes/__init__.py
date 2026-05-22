@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from . import auth, contacts, exports, runs, sources, suppressions, users
+from . import admin, auth, contacts, exports, runs, sources, suppressions, users
 
 
 def register(app: FastAPI) -> None:
@@ -14,3 +14,4 @@ def register(app: FastAPI) -> None:
     app.include_router(contacts.router)
     app.include_router(exports.router)
     app.include_router(suppressions.router)
+    app.include_router(admin.router)

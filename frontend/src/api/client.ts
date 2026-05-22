@@ -70,12 +70,19 @@ export const api = {
   createUser: (b: { email: string; full_name: string; role: string }) =>
     request("/api/users", { method: "POST", body: JSON.stringify(b) }),
   // Sources
-  listSources: () => request<Source[]>("/api/sources"),
+  listSources: (opts: { activeOnly?: boolean } = {}) =>
+    request<Source[]>(`/api/sources?active_only=${opts.activeOnly === false ? "false" : "true"}`),
   createSource: (b: Partial<Source>) =>
     request<Source>("/api/sources", { method: "POST", body: JSON.stringify(b) }),
+  updateSource: (id: string, b: Partial<Source>) =>
+    request<Source>(`/api/sources/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteSource: (id: string) =>
+    request<void>(`/api/sources/${id}`, { method: "DELETE" }),
   // Runs
   listRuns: (status?: string) =>
     request<Run[]>(`/api/runs${status ? `?status_filter=${status}` : ""}`),
+  runCounts: () =>
+    request<{ total: number; by_status: Record<string, number> }>(`/api/runs/counts`),
   getRun: (id: string) => request<Run>(`/api/runs/${id}`),
   createRun: (b: { source_id: string; max_cost_cents: number }) =>
     request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }),
@@ -94,6 +101,7 @@ export const api = {
     review_status?: string;
     dedupe_status?: string;
     has_email?: boolean;
+    has_contact_info?: boolean;
     limit?: number;
   }) => {
     const q = new URLSearchParams();
@@ -114,6 +122,8 @@ export const api = {
     request<Suppression>("/api/suppressions", { method: "POST", body: JSON.stringify(b) }),
   deleteSuppression: (id: string) =>
     request<void>(`/api/suppressions/${id}`, { method: "DELETE" }),
+  // Admin
+  getMemory: (limit = 2016) => request<MemoryResponse>(`/api/admin/memory?limit=${limit}`),
 };
 
 export interface Me {
@@ -177,6 +187,7 @@ export interface RunPage {
   created_at: string;
   contacts_extracted: number;
   organizations_extracted: number;
+  error: string | null;
 }
 
 export interface Contact {
@@ -209,6 +220,34 @@ export interface Contact {
   score_has_travel_signal: boolean;
   previously_exported: boolean;
   created_at: string;
+}
+
+export interface MemorySnapshot {
+  iso_ts: string;
+  mem_total_kb: number;
+  mem_available_kb: number;
+  mem_free_kb: number;
+  swap_total_kb: number;
+  swap_free_kb: number;
+  buffers_kb: number;
+  cached_kb: number;
+}
+
+export interface MemorySummary {
+  sample_count: number;
+  window_start: string | null;
+  window_end: string | null;
+  peak_used_kb: number;
+  avg_used_kb: number;
+  current_used_kb: number;
+  mem_total_kb: number;
+  headroom_pct: number;
+}
+
+export interface MemoryResponse {
+  current: MemorySnapshot | null;
+  history: MemorySnapshot[];
+  summary: MemorySummary | null;
 }
 
 export interface Suppression {

@@ -9,7 +9,7 @@ import { Badge } from "@/components/Badge";
 
 // Mirrors backend/app/services/run_orchestrator.py:MAX_PAGES_PER_RUN.
 // If the backend cap changes, update this too — it's only a UI hint.
-const MAX_PAGES_PER_RUN = 500;
+const MAX_PAGES_PER_RUN = 1500;
 
 export default function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -127,6 +127,8 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
         </div>
       </div>
 
+      <StatusBanner run={run} />
+
       <Card>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <Stat label="Status" value={run.status} />
@@ -165,6 +167,60 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
               ends the run.
             </p>
           )}
+          <details className="text-xs text-neutral-600">
+            <summary className="cursor-pointer font-medium text-neutral-800">
+              How is this cost calculated?
+            </summary>
+            <div className="mt-2 space-y-2 max-w-prose">
+              <p>
+                Cost counts only the <strong>Sonnet 4.5 extraction calls</strong>{" "}
+                the orchestrator makes after a page is fetched. Crawling itself
+                is free regardless of tier — httpx (Tier 1) and the
+                self-hosted Firecrawl (Tier 2) both run on this server with
+                no per-request bill.
+              </p>
+              <p>
+                After each Anthropic call, the response&apos;s{" "}
+                <code>usage</code> object is multiplied by Sonnet 4.5&apos;s
+                published per-token prices:
+              </p>
+              <ul className="list-disc pl-5">
+                <li>
+                  <strong>Input</strong> tokens — $3.00 / M (0.0003¢ each)
+                </li>
+                <li>
+                  <strong>Cache write</strong> (5-min ephemeral) — $3.75 / M
+                  (0.000375¢ each)
+                </li>
+                <li>
+                  <strong>Cache read</strong> (warm hit on the system prompt) —{" "}
+                  $0.30 / M (0.00003¢ each)
+                </li>
+                <li>
+                  <strong>Output</strong> tokens — $15.00 / M (0.0015¢ each)
+                </li>
+              </ul>
+              <p>
+                The four are summed and{" "}
+                <strong>rounded up to an integer cent</strong> (never
+                undercharge against the cap), then added to{" "}
+                <code>cost_cents</code>. Before every Anthropic call the
+                worker checks{" "}
+                <code>cost_cents + estimated_next_call &gt; max_cost_cents</code>{" "}
+                — if true the run halts with{" "}
+                <code>status=over_budget</code>; any pages not yet extracted
+                just stay un-extracted, so you can rerun later with a higher
+                cap and pick up where it stopped.
+              </p>
+              <p>
+                The cache-read discount is the whole point of keeping a long
+                stable system prompt — after the first call in a 5-minute
+                window, the bulk of each subsequent page is billed at the
+                0.1× rate, so typical pages land at a small fraction of a
+                cent each.
+              </p>
+            </div>
+          </details>
         </div>
       </Card>
 
@@ -202,7 +258,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
                     SSRF guard (no private IPs, no non-http schemes).
                   </li>
                   <li>
-                    Crawl up to {MAX_PAGES_PER_RUN} pages across ≤30 unique
+                    Crawl up to {MAX_PAGES_PER_RUN} pages across ≤500 unique
                     domains, at 2 req/sec per domain, archiving raw HTML as
                     it goes.
                   </li>
@@ -248,6 +304,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
                     p.http_status,
                     p.contacts_extracted,
                     p.organizations_extracted,
+                    p.error,
                   )}
                 </p>
               </li>
@@ -485,6 +542,7 @@ function pageActionDescription(
   http: number | null,
   contacts: number,
   orgs: number,
+  error: string | null = null,
 ): string {
   if (status === "fetched") {
     if (http && http >= 500) return `Fetched, but the server returned ${http} — page body discarded.`;
@@ -508,7 +566,8 @@ function pageActionDescription(
     return "Skipped — too many redirects in a row; gave up to avoid a loop.";
   }
   if (status === "error") {
-    return "Fetch failed (network error, timeout, or invalid response); nothing extracted from this URL.";
+    const base = "Fetch failed (network error, timeout, or invalid response); nothing extracted from this URL.";
+    return error ? `${base} (${error})` : base;
   }
   return "";
 }
@@ -522,4 +581,127 @@ function relativeTime(iso: string): string {
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.round(mins / 60);
   return `${hours}h ago`;
+}
+
+
+function StatusBanner({ run }: { run: Run }) {
+  // The single most-asked question on this page is "is it still working or
+  // is it done?" — make that answerable from across the room. Color +
+  // icon + headline + a one-line "what now" sentence per status.
+  const s = run.status;
+
+  const styles: Record<string, { wrap: string; dot: string; icon: string; title: string }> = {
+    pending: {
+      wrap: "border-amber-300 bg-amber-50 text-amber-900",
+      dot: "bg-amber-500",
+      icon: "\u23F8",
+      title: "Not started yet",
+    },
+    running: {
+      wrap: "border-blue-300 bg-blue-50 text-blue-900",
+      dot: "bg-blue-500 animate-pulse",
+      icon: "\u25B6",
+      title: "Running now",
+    },
+    completed: {
+      wrap: "border-emerald-300 bg-emerald-50 text-emerald-900",
+      dot: "bg-emerald-500",
+      icon: "\u2713",
+      title: "Finished",
+    },
+    failed: {
+      wrap: "border-red-300 bg-red-50 text-red-900",
+      dot: "bg-red-500",
+      icon: "\u2717",
+      title: "Failed",
+    },
+    over_budget: {
+      wrap: "border-amber-300 bg-amber-50 text-amber-900",
+      dot: "bg-amber-500",
+      icon: "\u26A0",
+      title: "Stopped \u2014 budget cap reached",
+    },
+  };
+  const style = styles[s] ?? {
+    wrap: "border-neutral-300 bg-neutral-50 text-neutral-900",
+    dot: "bg-neutral-400",
+    icon: "\u25CB",
+    title: s,
+  };
+
+  let detail: React.ReactNode = null;
+  if (s === "pending") {
+    detail = (
+      <>
+        Click <strong>Start run</strong> above to kick off the crawler.
+      </>
+    );
+  } else if (s === "running" && run.started_at) {
+    detail = (
+      <>
+        Started <strong>{runDuration(run.started_at, new Date().toISOString())} ago</strong>{" "}
+        \u00B7 <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}{" "}
+        fetched, <strong>{run.contacts_extracted}</strong> lead{run.contacts_extracted === 1 ? "" : "s"}{" "}
+        so far. This page polls every 2s.
+      </>
+    );
+  } else if (s === "completed" && run.completed_at) {
+    const dur = run.started_at ? runDuration(run.started_at, run.completed_at) : "?";
+    const finishedAgo = runDuration(run.completed_at, new Date().toISOString());
+    detail = (
+      <>
+        Finished <strong>{finishedAgo} ago</strong> \u00B7 ran for{" "}
+        <strong>{dur}</strong> \u00B7 pulled <strong>{run.contacts_extracted}</strong>{" "}
+        lead{run.contacts_extracted === 1 ? "" : "s"} from{" "}
+        <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}.
+      </>
+    );
+  } else if (s === "failed" && run.completed_at) {
+    const finishedAgo = runDuration(run.completed_at, new Date().toISOString());
+    detail = (
+      <>
+        Stopped <strong>{finishedAgo} ago</strong> after{" "}
+        <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}.{" "}
+        Check backend logs for the orchestrator traceback.
+      </>
+    );
+  } else if (s === "over_budget") {
+    detail = (
+      <>
+        Spent <strong>{run.cost_cents}\u00A2 of {run.max_cost_cents}\u00A2</strong>{" "}
+        before the cap halted extraction. Unprocessed pages stayed un-extracted \u2014
+        rerun with a higher cap to pick up where it stopped.
+      </>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      aria-live={s === "running" ? "polite" : "off"}
+      className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${style.wrap}`}
+    >
+      <span className={`mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ${style.dot}`} aria-hidden />
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          <span className="text-lg" aria-hidden>{style.icon}</span>
+          <span className="font-semibold text-base">{style.title}</span>
+          <code className="font-mono text-xs opacity-70">({s})</code>
+        </div>
+        {detail && <div className="text-sm mt-0.5">{detail}</div>}
+      </div>
+    </div>
+  );
+}
+
+function runDuration(start: string, end: string): string {
+  const ms = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
 }
