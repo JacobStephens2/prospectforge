@@ -33,6 +33,7 @@ import yaml
 from app.db import SessionLocal
 from app.models import ProspectRun, Source, User
 from app.services.extraction import ExtractionRunResult, extract_from_page
+from app.services.regex_extract import extract_signals
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,27 @@ class FixtureResult:
     retried: bool
     misses: list[str]
     extras: list[str]
+    # Yield-style counts to track the contact-recovery workstream.
+    # pre_pass_* are deterministic regex output and don't require an LLM call,
+    # so --prepass-only runs populate them with zero LLM cost. extracted_*
+    # are post-LLM-and-evidence-verification counts.
+    pre_pass_emails: int = 0
+    pre_pass_phones: int = 0
+    extracted_emails: int = 0
+    extracted_phones: int = 0
+
+
+@dataclass
+class PrePassResult:
+    """Deterministic pre-pass output for one fixture. Lets us baseline regex
+    yield (and measure de-obfuscation lift) without paying for an LLM call.
+    """
+
+    fixture: str
+    pre_pass_emails: int
+    pre_pass_phones: int
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
 
 
 def _normalize(s: str | None) -> str:
@@ -106,6 +128,9 @@ def _run_one(fixture: dict, db) -> FixtureResult:
 
     expected = fixture.get("expected_contacts", [])
     extracted = [vc.contact for vc in result.verified_contacts if vc.keep]
+    pre_pass = extract_signals(fixture["page_text"])
+    extracted_emails = sum(1 for c in extracted if c.email)
+    extracted_phones = sum(1 for c in extracted if c.phone)
 
     matched: list[dict] = []
     matched_extracted: set[int] = set()
@@ -143,7 +168,44 @@ def _run_one(fixture: dict, db) -> FixtureResult:
         retried=result.retried,
         misses=misses,
         extras=extras,
+        pre_pass_emails=len(pre_pass.emails),
+        pre_pass_phones=len(pre_pass.phones),
+        extracted_emails=extracted_emails,
+        extracted_phones=extracted_phones,
     )
+
+
+def _run_prepass_only(fixture: dict) -> PrePassResult:
+    """Deterministic pre-pass over the fixture's page_text. No DB, no LLM."""
+    pre_pass = extract_signals(fixture["page_text"])
+    return PrePassResult(
+        fixture=fixture["name"],
+        pre_pass_emails=len(pre_pass.emails),
+        pre_pass_phones=len(pre_pass.phones),
+        emails=pre_pass.emails,
+        phones=pre_pass.phones,
+    )
+
+
+def _print_prepass_report(results: list[PrePassResult]) -> None:
+    """Yield-only baseline. Emails/phones the regex pre-pass finds, per fixture
+    and overall. Use as a before/after gauge on de-obfuscation work — a change
+    is working if these counts go up on the same fixtures.
+    """
+    total_emails = sum(r.pre_pass_emails for r in results)
+    total_phones = sum(r.pre_pass_phones for r in results)
+    print()
+    print("=" * 70)
+    print(f"PRE-PASS YIELD BASELINE (deterministic; no LLM, no DB)")
+    print("-" * 70)
+    print(f"{'Fixture':<45} {'Emails':>8} {'Phones':>8}")
+    print("-" * 70)
+    for r in results:
+        print(f"{r.fixture:<45} {r.pre_pass_emails:>8} {r.pre_pass_phones:>8}")
+    print("-" * 70)
+    print(f"{'TOTAL':<45} {total_emails:>8} {total_phones:>8}")
+    print("=" * 70)
+    print()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,6 +219,15 @@ def main(argv: list[str] | None = None) -> int:
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the text report.",
+    )
+    p.add_argument(
+        "--prepass-only",
+        action="store_true",
+        help=(
+            "Skip the LLM extraction and only report the deterministic regex "
+            "pre-pass counts per fixture. No DB, no Anthropic cost. Use this "
+            "to baseline yield before/after de-obfuscation work."
+        ),
     )
     args = p.parse_args(argv)
 
@@ -175,6 +246,14 @@ def main(argv: list[str] | None = None) -> int:
         print("no fixtures matched", file=sys.stderr)
         return 2
 
+    if args.prepass_only:
+        prepass_results = [_run_prepass_only(f) for f in fixtures]
+        if args.json:
+            print(json.dumps([r.__dict__ for r in prepass_results], indent=2, default=list))
+            return 0
+        _print_prepass_report(prepass_results)
+        return 0
+
     db = SessionLocal()
     results: list[FixtureResult] = []
     try:
@@ -191,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     total_extracted = sum(r.extracted_count for r in results)
     total_matched = sum(r.matched_count for r in results)
     total_expected = sum(r.expected_count for r in results)
+    total_pre_emails = sum(r.pre_pass_emails for r in results)
+    total_pre_phones = sum(r.pre_pass_phones for r in results)
+    total_ex_emails = sum(r.extracted_emails for r in results)
+    total_ex_phones = sum(r.extracted_phones for r in results)
     overall_p = total_matched / total_extracted if total_extracted else 0.0
     overall_r = total_matched / total_expected if total_expected else 0.0
     overall_f1 = (
@@ -199,18 +282,28 @@ def main(argv: list[str] | None = None) -> int:
     total_cost = sum(r.cost_cents for r in results)
 
     print()
-    print("=" * 70)
-    print(f"{'Fixture':<35} {'P':>5} {'R':>5} {'F1':>5} {'Cost':>6}")
-    print("-" * 70)
+    print("=" * 80)
+    print(f"{'Fixture':<35} {'P':>5} {'R':>5} {'F1':>5} {'PreE':>5} {'PreP':>5} {'ExE':>4} {'ExP':>4} {'Cost':>6}")
+    print("-" * 80)
     for r in results:
-        print(f"{r.fixture:<35} {r.precision:>5.2f} {r.recall:>5.2f} {r.f1:>5.2f} {r.cost_cents:>5}¢")
+        print(
+            f"{r.fixture:<35} {r.precision:>5.2f} {r.recall:>5.2f} {r.f1:>5.2f} "
+            f"{r.pre_pass_emails:>5} {r.pre_pass_phones:>5} "
+            f"{r.extracted_emails:>4} {r.extracted_phones:>4} {r.cost_cents:>5}¢"
+        )
         if r.misses:
             print(f"    MISSED:    {', '.join(r.misses)}")
         if r.extras:
             print(f"    EXTRA:     {', '.join(r.extras)}")
-    print("-" * 70)
-    print(f"{'OVERALL':<35} {overall_p:>5.2f} {overall_r:>5.2f} {overall_f1:>5.2f} {total_cost:>5}¢")
-    print("=" * 70)
+    print("-" * 80)
+    print(
+        f"{'OVERALL':<35} {overall_p:>5.2f} {overall_r:>5.2f} {overall_f1:>5.2f} "
+        f"{total_pre_emails:>5} {total_pre_phones:>5} "
+        f"{total_ex_emails:>4} {total_ex_phones:>4} {total_cost:>5}¢"
+    )
+    print("=" * 80)
+    print("  Columns: P/R/F1 vs labels; PreE/PreP = regex pre-pass emails/phones;")
+    print("           ExE/ExP = post-LLM extracted emails/phones (yield)")
     print()
     # Spec §1.2 target: precision ≥ 0.85 by week 8.
     if overall_p < 0.85:

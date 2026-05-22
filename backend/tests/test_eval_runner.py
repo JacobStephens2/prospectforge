@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from app.eval.run import FIXTURE_DIR, _matches, _normalize
+from app.eval.run import FIXTURE_DIR, _matches, _normalize, _run_prepass_only, main
 
 
 @dataclass
@@ -63,3 +63,38 @@ def test_starter_fixture_parses():
     doc = yaml.safe_load(path.read_text())
     assert "name" in doc and "page_text" in doc and "expected_contacts" in doc
     assert len(doc["expected_contacts"]) >= 1
+
+
+def test_prepass_only_counts_signals():
+    """Pre-pass mode runs without DB/LLM and reports signal counts."""
+    fixture = {
+        "name": "synthetic",
+        "page_text": (
+            "Email Jane at jane@school.edu or call (512) 555-1234. "
+            "Bob's address: bob@school.edu."
+        ),
+    }
+    result = _run_prepass_only(fixture)
+    assert result.fixture == "synthetic"
+    assert result.pre_pass_emails == 2
+    assert result.pre_pass_phones == 1
+    assert "jane@school.edu" in result.emails
+    assert "(512) 555-1234" in result.phones
+
+
+def test_prepass_only_main_returns_zero(capsys, tmp_path, monkeypatch):
+    """CLI --prepass-only path: exits 0, prints a baseline report, no DB calls."""
+    fx_dir = tmp_path / "fixtures"
+    fx_dir.mkdir()
+    (fx_dir / "demo.yaml").write_text(
+        "name: demo\n"
+        "source_url: https://x.test/\n"
+        "page_text: |\n"
+        "  Contact Jane at jane@x.test or call (512) 555-1212.\n"
+    )
+    monkeypatch.setattr("app.eval.run.FIXTURE_DIR", fx_dir)
+    rc = main(["--prepass-only"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PRE-PASS YIELD BASELINE" in out
+    assert "demo" in out
