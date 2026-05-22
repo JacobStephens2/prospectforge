@@ -61,6 +61,7 @@ from app.services.crm_bridge import (
     lookup_organization_dedupe,
 )
 from app.services.url_discovery import discover_links
+from app.services.sitemap_discovery import discover_sitemap_urls
 from app.workers.crawl import HTTP_TIMEOUT_SECS, _metadata_with_error, safe_fetch
 from app.services.firecrawl_client import map_site as firecrawl_map_site
 from app.services.firecrawl_client import scrape as firecrawl_scrape
@@ -370,6 +371,32 @@ def execute_run(
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("link discovery failed for %s: %s", base_for_discovery, exc)
+
+            # Sitemap + robots.txt recall booster — merged with the link-crawl
+            # output, deduped, same-domain only. We keep link-crawl results
+            # first so the original ordering wins on dedupe.
+            try:
+                sitemap_urls = discover_sitemap_urls(
+                    base_for_discovery,
+                    client=client,
+                    max_urls=max_pages,
+                )
+                seen = set(same_domain_urls)
+                added = 0
+                for u in sitemap_urls:
+                    if u not in seen and len(same_domain_urls) < max_pages - 1:
+                        same_domain_urls.append(u)
+                        seen.add(u)
+                        added += 1
+                log.info(
+                    "sitemap discovery on %s → %d additional URLs (merged into same-domain pool)",
+                    base_for_discovery,
+                    added,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "sitemap discovery failed for %s: %s", base_for_discovery, exc
+                )
 
         # ----- Step 3: queue the seed for extraction -----
         pages_to_extract: list[SourcePage] = [page]
