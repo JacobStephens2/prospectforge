@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.services.deobfuscate import deobfuscate_text
+
 
 # RFC 5322 is a rabbit hole; this practical pattern is the same one used by
 # countless data-extraction libraries and matches >99% of real-world emails.
@@ -54,9 +56,16 @@ def _normalize_phone(area: str, exchange: str, sub: str) -> str:
 
 
 def extract_signals(text: str | None) -> PrePass:
-    """Find emails and phones in raw page text. Order-preserving dedupe."""
+    """Find emails and phones in raw page text. Order-preserving dedupe.
+
+    Runs deobfuscate_text first so HTML-entity-encoded addresses (`&#64;`)
+    and bracketed `[at]`/`[dot]` variants get normalized before the regex
+    pass. The HTML-aware Cloudflare cfemail decode happens earlier in the
+    crawl worker (before trafilatura strips the attribute).
+    """
     if not text:
         return PrePass((), ())
+    text = deobfuscate_text(text)
 
     seen_emails: dict[str, None] = {}
     for m in _EMAIL_RE.finditer(text):

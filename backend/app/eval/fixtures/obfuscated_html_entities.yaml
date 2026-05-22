@@ -1,0 +1,26 @@
+name: obfuscated_html_entities
+description: |
+  Synthetic fixture exercising the HTML-entity-encoded email case
+  (`&#64;` and `&#46;`) that trafilatura sometimes leaves un-decoded
+  in extracted text. deobfuscate_text now html.unescape()s before
+  the regex pre-pass runs.
+source_url: https://example-academy.test/contact
+page_text: |
+  Westwood Academy — Contact
+
+  Director of Curriculum: Dr. Ana Romero
+  romero&#64;westwood-academy&#46;edu
+  (415) 555-0199
+
+  Choir Director: Tom Becker
+  becker&commat;westwood-academy&period;edu
+expected_organizations:
+  - name: Westwood Academy
+    state: CA
+expected_contacts:
+  - name: Ana Romero
+    title_contains: curriculum
+    email: romero@westwood-academy.edu
+  - name: Tom Becker
+    title_contains: choir
+    email: becker@westwood-academy.edu

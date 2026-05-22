@@ -1,0 +1,26 @@
+name: obfuscated_bracketed_at_dot
+description: |
+  Synthetic fixture exercising the bracketed [at]/[dot] obfuscation
+  variant that deobfuscate_text normalizes. Pre-pass should now find
+  both addresses where it previously found zero. Morgan should swap this
+  for a real-world site once we have one.
+source_url: https://example-school.test/staff/
+page_text: |
+  Lincoln High School — Performing Arts Department
+
+  Band Director: Sara Patel
+  Email: spatel [at] lincoln-high [dot] org
+
+  Theater Director: Marcus Lee
+  Email: m.lee(at)lincoln-high(dot)org
+  Office: (512) 555-7820
+expected_organizations:
+  - name: Lincoln High School
+    state: TX
+expected_contacts:
+  - name: Sara Patel
+    title_contains: band
+    email: spatel@lincoln-high.org
+  - name: Marcus Lee
+    title_contains: theater
+    email: m.lee@lincoln-high.org
