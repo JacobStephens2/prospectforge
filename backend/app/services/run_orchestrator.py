@@ -35,7 +35,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from sqlalchemy.orm import Session
@@ -334,77 +334,135 @@ def execute_run(
             pages_blocked += 1
 
         # ----- Step 2: discover URLs from the seed page -----
-        # Tier 1 parses the raw HTML we already captured (avoids a 2nd
-        # fetch + the redirect bug we fixed earlier). Tier 2 delegates to
-        # Firecrawl /v2/map, which can enumerate URLs from JS-rendered
-        # directory pages that BeautifulSoup wouldn't see.
+        # Both tiers union three discovery methods so no single source is
+        # load-bearing:
+        #   1. Link extraction on the seed page's raw HTML (Tier-2 returns
+        #      JS-rendered HTML so this still finds links the static fetcher
+        #      would miss).
+        #   2. sitemap.xml + robots.txt Sitemap: lines.
+        #   3. Tier-2 only: Firecrawl /v2/map for SPA-discovered routes.
+        # Order-preserving dedupe; the first signal a URL appears in wins
+        # its position in the frontier.
         same_domain_urls: list[str] = []
         external_urls: list[str] = []
-        if crawl_tier == 2:
+        base_for_discovery: str | None = None
+        if result.status == "fetched":
             base_for_discovery = result.canonical_url or source.url
-            try:
-                mapped = firecrawl_map_site(base_for_discovery, limit=max_pages)
-                seed_host = urlparse(base_for_discovery).netloc.lower()
-                for u in mapped:
-                    host = urlparse(u).netloc.lower()
-                    if host == seed_host:
-                        same_domain_urls.append(u)
-                    elif source.follow_external_links and len(external_urls) < source.max_external_pages:
-                        external_urls.append(u)
-                log.info(
-                    "firecrawl /map on %s → %d same-domain, %d external",
-                    base_for_discovery,
-                    len(same_domain_urls),
-                    len(external_urls),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("firecrawl map failed for %s: %s", base_for_discovery, exc)
-        elif result.status == "fetched" and result.raw_body:
-            base_for_discovery = result.canonical_url or source.url
-            try:
-                html_text = result.raw_body.decode("utf-8", errors="replace")
-                same_domain_urls, external_urls = discover_links(
-                    base_url=base_for_discovery,
-                    html=html_text,
-                    max_same=max_pages - 1,
-                    max_external=(
-                        source.max_external_pages if source.follow_external_links else 0
-                    ),
-                )
-                log.info(
-                    "discovery on %s → %d same-domain, %d external",
-                    base_for_discovery,
-                    len(same_domain_urls),
-                    len(external_urls),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("link discovery failed for %s: %s", base_for_discovery, exc)
+            seed_host = urlparse(base_for_discovery).netloc.lower()
+            seen_same: set[str] = set()
+            seen_external: set[str] = set()
 
-            # Sitemap + robots.txt recall booster — merged with the link-crawl
-            # output, deduped, same-domain only. We keep link-crawl results
-            # first so the original ordering wins on dedupe.
+            def _add_same(u: str) -> None:
+                if u in seen_same:
+                    return
+                if len(same_domain_urls) >= max_pages - 1:
+                    return
+                same_domain_urls.append(u)
+                seen_same.add(u)
+
+            def _add_external(u: str) -> None:
+                if u in seen_external:
+                    return
+                cap = source.max_external_pages if source.follow_external_links else 0
+                if cap <= 0 or len(external_urls) >= cap:
+                    return
+                external_urls.append(u)
+                seen_external.add(u)
+
+            # 1) Link extraction from the seed's HTML (raw_body is set by
+            #    safe_fetch for Tier-1 and by firecrawl_scrape for Tier-2).
+            if result.raw_body:
+                try:
+                    html_text = result.raw_body.decode("utf-8", errors="replace")
+                    link_same, link_ext = discover_links(
+                        base_url=base_for_discovery,
+                        html=html_text,
+                        max_same=max_pages - 1,
+                        max_external=(
+                            source.max_external_pages
+                            if source.follow_external_links
+                            else 0
+                        ),
+                    )
+                    for u in link_same:
+                        _add_same(u)
+                    for u in link_ext:
+                        _add_external(u)
+                    log.info(
+                        "link discovery on %s → %d same-domain, %d external",
+                        base_for_discovery,
+                        len(link_same),
+                        len(link_ext),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "link discovery failed for %s: %s", base_for_discovery, exc
+                    )
+
+            # 2) Sitemap + robots.txt recall booster.
             try:
                 sitemap_urls = discover_sitemap_urls(
                     base_for_discovery,
                     client=client,
                     max_urls=max_pages,
                 )
-                seen = set(same_domain_urls)
-                added = 0
+                before = len(same_domain_urls)
                 for u in sitemap_urls:
-                    if u not in seen and len(same_domain_urls) < max_pages - 1:
-                        same_domain_urls.append(u)
-                        seen.add(u)
-                        added += 1
+                    _add_same(u)
                 log.info(
-                    "sitemap discovery on %s → %d additional URLs (merged into same-domain pool)",
+                    "sitemap discovery on %s → +%d same-domain URLs",
                     base_for_discovery,
-                    added,
+                    len(same_domain_urls) - before,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "sitemap discovery failed for %s: %s", base_for_discovery, exc
                 )
+
+            # 3) Firecrawl /v2/map for Tier-2 only (Tier-1 sites are static
+            #    enough that the HTML link extraction covers the same ground).
+            #    Falls back to the base domain when the sub-path returns
+            #    empty — Firecrawl itself recommends this in the warning
+            #    field when /map yields nothing for a sub-path.
+            if crawl_tier == 2:
+                try:
+                    mapped = firecrawl_map_site(base_for_discovery, limit=max_pages)
+                    if not mapped:
+                        parsed = urlparse(base_for_discovery)
+                        base_only = urlunparse(
+                            (parsed.scheme, parsed.netloc, "/", "", "", "")
+                        )
+                        if base_only != base_for_discovery:
+                            log.info(
+                                "firecrawl /map empty for %s, retrying base %s",
+                                base_for_discovery,
+                                base_only,
+                            )
+                            mapped = firecrawl_map_site(base_only, limit=max_pages)
+                    map_added_same = 0
+                    map_added_ext = 0
+                    for u in mapped:
+                        host = urlparse(u).netloc.lower()
+                        if host == seed_host:
+                            before = len(same_domain_urls)
+                            _add_same(u)
+                            if len(same_domain_urls) > before:
+                                map_added_same += 1
+                        elif source.follow_external_links:
+                            before = len(external_urls)
+                            _add_external(u)
+                            if len(external_urls) > before:
+                                map_added_ext += 1
+                    log.info(
+                        "firecrawl /map on %s → +%d same-domain, +%d external",
+                        base_for_discovery,
+                        map_added_same,
+                        map_added_ext,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "firecrawl map failed for %s: %s", base_for_discovery, exc
+                    )
 
         # ----- Step 3: queue the seed for extraction -----
         pages_to_extract: list[SourcePage] = [page]
