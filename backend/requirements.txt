@@ -22,6 +22,9 @@ anthropic==0.42.0
 httpx==0.28.1
 trafilatura==2.0.0
 
+# PDF text extraction (yield workstream): pure-python, MIT, no native deps.
+pypdf==5.1.0
+
 # Observability
 sentry-sdk[fastapi]==2.19.2
 structlog==24.4.0

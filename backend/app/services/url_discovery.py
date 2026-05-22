@@ -33,8 +33,11 @@ class _LinkExtractor(HTMLParser):
 
 
 # Strip anchors and obvious non-page resources we don't want to crawl.
+# NOTE: .pdf is intentionally NOT excluded — board minutes, faculty
+# rosters, conference programs are commonly PDFs and the crawl worker
+# routes application/pdf bodies through services.pdf_extract.
 _SKIP_EXTENSIONS = re.compile(
-    r"\.(pdf|jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|mp3|mp4|mov|avi|ico)(\?|$)",
+    r"\.(jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|mp3|mp4|mov|avi|ico)(\?|$)",
     re.IGNORECASE,
 )
 

@@ -45,11 +45,24 @@ def test_discovery_skips_non_http_schemes() -> None:
     assert all(not u.startswith(("mailto:", "tel:", "javascript:")) for u in out)
 
 
-def test_discovery_skips_pdf_and_assets() -> None:
+def test_discovery_keeps_pdf_links() -> None:
+    """PDFs are first-class crawl targets now (board minutes, faculty
+    rosters). Other binary assets (images, css, archives) stay excluded."""
     out = discover_same_domain_urls(
         base_url="https://phoenixisd.example.org/", html=HTML
     )
-    assert all(not u.endswith(".pdf") for u in out)
+    assert any(u.endswith(".pdf") for u in out)
+
+
+def test_discovery_still_skips_binary_assets() -> None:
+    html = (
+        '<a href="/img.png">img</a> '
+        '<a href="/style.css">css</a> '
+        '<a href="/page">page</a>'
+    )
+    out = discover_same_domain_urls(base_url="https://x.test/", html=html)
+    assert all(not u.endswith((".png", ".css")) for u in out)
+    assert "https://x.test/page" in out
 
 
 def test_discovery_dedupes_and_strips_fragments() -> None:

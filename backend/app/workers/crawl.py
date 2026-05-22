@@ -36,6 +36,7 @@ import trafilatura
 from app.db import SessionLocal
 from app.models import SourcePage
 from app.services.deobfuscate import deobfuscate_html
+from app.services.pdf_extract import extract_pdf_text, is_pdf_content_type
 from app.services.ssrf_guard import SSRFBlocked, validate_target_url
 
 MAX_REDIRECTS = 5
@@ -75,12 +76,16 @@ def _hash_body(body: bytes) -> str:
 
 
 def _extract_markdown(body: bytes, content_type: str | None) -> str | None:
-    """Run trafilatura on HTML; bail on PDFs / images / etc.
+    """Extract page text. HTML → trafilatura (post cfemail decode);
+    application/pdf → pypdf via services.pdf_extract; everything else (images,
+    archives, etc) → None.
 
     Runs deobfuscate_html before trafilatura because the Cloudflare cfemail
     attribute is on the wrapping tag — trafilatura strips it on extraction
     and the decoded email would never reach the pre-pass otherwise.
     """
+    if is_pdf_content_type(content_type):
+        return extract_pdf_text(body)
     if content_type and not content_type.lower().startswith(("text/", "application/xhtml")):
         return None
     try:
