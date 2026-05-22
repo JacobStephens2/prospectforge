@@ -60,6 +60,8 @@ from app.services.crm_bridge import (
     lookup_contact_dedupe,
     lookup_organization_dedupe,
 )
+from app.services.directory_detect import score_directory_likelihood
+from app.services.pagination_detect import discover_pagination_urls
 from app.services.url_discovery import discover_links
 from app.services.sitemap_discovery import discover_sitemap_urls
 from app.services.spa_detect import should_auto_escalate
@@ -76,6 +78,10 @@ log = logging.getLogger(__name__)
 MAX_PAGES_PER_RUN = 1500
 MAX_DOMAINS_PER_RUN = 500
 ARCHIVE_ROOT = "/var/lib/prospectforge/archive"
+# Per-directory cap on dynamically-discovered paginator links. Bounded
+# so a paginator that links to thousands of "?page=N" entries can't blow
+# up the queue or budget.
+MAX_PAGINATION_URLS_PER_DIRECTORY = 30
 
 
 @dataclass
@@ -411,9 +417,15 @@ def execute_run(
         # win the per-run budget before time-sensitive pages (news/calendar).
         same_domain_urls = rank_urls(same_domain_urls)
         external_urls = rank_urls(external_urls)
-        all_to_walk = list(same_domain_urls) + list(external_urls)
+        # Index-based walk so paginator URLs discovered mid-walk can be
+        # appended to the frontier dynamically and processed in subsequent
+        # iterations of the same loop.
+        all_to_walk: list[str] = list(same_domain_urls) + list(external_urls)
         escalations_used = 0
-        for url in all_to_walk:
+        i = 0
+        while i < len(all_to_walk):
+            url = all_to_walk[i]
+            i += 1
             if url in seen_urls:
                 continue
             if len(seen_urls) >= max_pages:
@@ -462,6 +474,44 @@ def execute_run(
             if step.status == "fetched":
                 pages_fetched += 1
                 pages_to_extract.append(step_page)
+
+                # Directory pagination expansion (NCES-style): if this page
+                # looks like a staff directory, harvest paginator URLs and
+                # append to the frontier so subsequent iterations crawl them.
+                if step.raw_body:
+                    try:
+                        title = (
+                            step.page_metadata.get("title")
+                            if step.page_metadata
+                            else None
+                        )
+                        dir_score = score_directory_likelihood(
+                            title=title,
+                            body_prefix=step.content_markdown,
+                        )
+                        if dir_score.is_directory:
+                            raw = step.raw_body.decode("utf-8", errors="replace")
+                            paginators = discover_pagination_urls(
+                                step.canonical_url or url,
+                                raw,
+                                max_urls=MAX_PAGINATION_URLS_PER_DIRECTORY,
+                            )
+                            added = 0
+                            for p_url in paginators:
+                                if p_url in seen_urls or p_url in all_to_walk:
+                                    continue
+                                all_to_walk.append(p_url)
+                                added += 1
+                            if added:
+                                log.info(
+                                    "directory page %s → +%d paginator URLs",
+                                    url,
+                                    added,
+                                )
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug(
+                            "pagination expansion failed for %s: %s", url, exc
+                        )
             else:
                 pages_blocked += 1
             run.pages_crawled = pages_fetched
