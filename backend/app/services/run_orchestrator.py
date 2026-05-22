@@ -62,6 +62,7 @@ from app.services.crm_bridge import (
 )
 from app.services.url_discovery import discover_links
 from app.services.sitemap_discovery import discover_sitemap_urls
+from app.services.url_scoring import rank_urls
 from app.workers.crawl import HTTP_TIMEOUT_SECS, _metadata_with_error, safe_fetch
 from app.services.firecrawl_client import map_site as firecrawl_map_site
 from app.services.firecrawl_client import scrape as firecrawl_scrape
@@ -404,7 +405,11 @@ def execute_run(
         # ----- Step 4: walk discovered URLs -----
         # Same-domain first, then external. We bias toward staying on the
         # source's site to find pagination + sub-pages, only spilling out
-        # to external members once we've exhausted that tier.
+        # to external members once we've exhausted that tier. Within each
+        # tier, rank by URL score so high-yield paths (staff/faculty/contact)
+        # win the per-run budget before time-sensitive pages (news/calendar).
+        same_domain_urls = rank_urls(same_domain_urls)
+        external_urls = rank_urls(external_urls)
         all_to_walk = list(same_domain_urls) + list(external_urls)
         for url in all_to_walk:
             if url in seen_urls:
