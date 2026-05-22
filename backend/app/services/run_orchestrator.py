@@ -62,6 +62,7 @@ from app.services.crm_bridge import (
 )
 from app.services.url_discovery import discover_links
 from app.services.sitemap_discovery import discover_sitemap_urls
+from app.services.spa_detect import should_auto_escalate
 from app.services.url_scoring import rank_urls
 from app.workers.crawl import HTTP_TIMEOUT_SECS, _metadata_with_error, safe_fetch
 from app.services.firecrawl_client import map_site as firecrawl_map_site
@@ -411,6 +412,7 @@ def execute_run(
         same_domain_urls = rank_urls(same_domain_urls)
         external_urls = rank_urls(external_urls)
         all_to_walk = list(same_domain_urls) + list(external_urls)
+        escalations_used = 0
         for url in all_to_walk:
             if url in seen_urls:
                 continue
@@ -433,6 +435,28 @@ def execute_run(
             except SSRFBlocked as exc:
                 log.info("SSRF blocked %s: %s", url, exc)
                 continue
+
+            # Tier-2 auto-escalation: Tier-1 fetched but produced near-empty
+            # markdown on a likely-SPA page that scored as a contact target.
+            # Re-fetch via Firecrawl so the rendered DOM reaches extraction.
+            if crawl_tier == 1 and step.status == "fetched" and should_auto_escalate(
+                url=url,
+                raw_body=step.raw_body,
+                markdown=step.content_markdown,
+                escalations_used=escalations_used,
+            ):
+                log.info("auto-escalating %s to Firecrawl (SPA shell)", url)
+                try:
+                    validate_target_url(url)
+                    rate_limiter.acquire(url)
+                    fc_result = firecrawl_scrape(url)
+                    if fc_result.status == "fetched":
+                        step = fc_result
+                        escalations_used += 1
+                except SSRFBlocked as exc:
+                    log.info("SSRF blocked escalation for %s: %s", url, exc)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("escalation failed for %s: %s", url, exc)
 
             step_page = _persist_page(db, run_id=run.id, result=step, raw_body=step.raw_body)
             if step.status == "fetched":
