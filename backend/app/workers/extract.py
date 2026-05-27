@@ -63,6 +63,14 @@ def _persist(
         org_id_by_name[extracted_org.name] = org.id
         orgs_written += 1
 
+    # If this page's run is an enrichment run for a specific contact,
+    # stamp every new contact with parent_contact_id so the UI groups
+    # them as suggestions under the original.
+    run = db.get(ProspectRun, page.run_id)
+    parent_contact_id = (
+        run.enrichment_for_contact_id if run is not None else None
+    )
+
     contacts_written = 0
     contacts_needs_review = 0
     contacts_skipped_dup = 0
@@ -86,6 +94,7 @@ def _persist(
             prompt_version_name=result.prompt_version[0],
             prompt_version_value=result.prompt_version[1],
             review_status=review_status,
+            parent_contact_id=parent_contact_id,
             # score_* fields default to False; scoring worker fills them in.
         )
         db.add(c)

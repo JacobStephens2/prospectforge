@@ -22,8 +22,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Contact, ExportRow, ReviewAction, User
+from app.models import Contact, ExportRow, ProspectRun, ReviewAction, User
 from app.routes.auth import current_user
+from app.services.enrichment_run import (
+    EnrichmentNotPossible,
+    list_enrichment_results,
+    list_enrichment_runs,
+    start_enrichment_run,
+)
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
@@ -251,3 +257,93 @@ def review_contact(
     db.commit()
     db.refresh(contact)
     return _hydrate_one(db, contact)
+
+
+# ---------- per-contact enrichment ----------
+
+
+class EnrichmentRunOut(BaseModel):
+    """Minimal projection of a ProspectRun, scoped to the enrichment surface."""
+
+    id: uuid.UUID
+    status: str
+    pages_crawled: int
+    contacts_extracted: int
+    cost_cents: int
+    max_cost_cents: int
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class EnrichmentSummary(BaseModel):
+    """Full enrichment view for a contact: runs that targeted it + the
+    contacts those runs produced (the suggestions to surface in UI)."""
+
+    parent_contact_id: uuid.UUID
+    runs: list[EnrichmentRunOut]
+    suggested_contacts: list[ContactOut]
+
+
+@router.post(
+    "/{contact_id}/enrich",
+    response_model=EnrichmentRunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def post_enrich(
+    contact_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> EnrichmentRunOut:
+    """Kick off a per-contact enrichment run. Returns the run row immediately
+    (status='pending'); the orchestrator runs in a background thread, same
+    pattern as POST /api/runs/{id}/start.
+
+    Fails 400 if the contact's organization has no domain or website — the
+    crawler needs a seed URL.
+    """
+    try:
+        run = start_enrichment_run(
+            db,
+            contact_id=contact_id,
+            requested_by_user_id=user.id,
+        )
+    except EnrichmentNotPossible as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Fire-and-forget the orchestrator, same shape as /api/runs/{id}/start.
+    import threading
+
+    from app.routes.runs import _run_in_background
+
+    threading.Thread(
+        target=_run_in_background, args=(run.id,), daemon=True
+    ).start()
+
+    return EnrichmentRunOut.model_validate(run)
+
+
+@router.get(
+    "/{contact_id}/enrichments", response_model=EnrichmentSummary
+)
+def get_enrichments(
+    contact_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> EnrichmentSummary:
+    """Return all enrichment runs that targeted this contact and the
+    contacts those runs produced as suggestions."""
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+
+    runs = list_enrichment_runs(db, parent_contact_id=contact_id)
+    suggestions = list_enrichment_results(db, parent_contact_id=contact_id)
+
+    return EnrichmentSummary(
+        parent_contact_id=contact_id,
+        runs=[EnrichmentRunOut.model_validate(r) for r in runs],
+        suggested_contacts=_hydrate(db, suggestions),
+    )

@@ -128,6 +128,13 @@ class ProspectRun(Base):
     pages_crawled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     contacts_extracted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # When set, this run was started as an enrichment for a specific contact
+    # (per-contact "find contact info" feature). Contacts produced by the run
+    # are linked back via contacts.parent_contact_id.
+    enrichment_for_contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
@@ -271,6 +278,13 @@ class Contact(Base):
     score_has_direct_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     score_has_phone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     score_has_travel_signal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Set when this row was produced by an enrichment run targeting the
+    # parent. Lets the UI display child rows as suggestions under the parent
+    # instead of as standalone results.
+    parent_contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -10,7 +10,7 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { api, type Contact } from "@/api/client";
+import { api, type Contact, type EnrichmentSummary } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/NativeSelect";
@@ -465,8 +465,171 @@ function ReviewInner() {
               )}
             </dd>
           </dl>
+          <EnrichmentPanel contact={selected} />
         </Card>
         </div>
+      )}
+    </div>
+  );
+}
+
+function EnrichmentPanel({ contact }: { contact: Contact }) {
+  const [data, setData] = useState<EnrichmentSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      setData(await api.getEnrichments(contact.id));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contact.id]);
+
+  // Poll while a run is still active so the operator sees completion
+  // without manually refreshing.
+  useEffect(() => {
+    const pending = data?.runs.some(
+      (r) => r.status === "pending" || r.status === "running",
+    );
+    if (!pending) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.runs.map((r) => r.status).join(",")]);
+
+  async function startEnrich() {
+    setStarting(true);
+    setErr(null);
+    try {
+      await api.enrichContact(contact.id);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const reachable = Boolean(contact.email || contact.phone);
+  const activeRun = data?.runs.find(
+    (r) => r.status === "pending" || r.status === "running",
+  );
+
+  return (
+    <div className="mt-4 pt-4 border-t">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h4 className="text-sm font-semibold">Find more contact info</h4>
+        <Button
+          variant="secondary"
+          onClick={startEnrich}
+          disabled={starting || Boolean(activeRun)}
+          title={
+            reachable
+              ? "This contact already has an email or phone. Enrichment will still re-crawl the org domain looking for additional info."
+              : "Crawl the contact's organization website looking for an email or phone for this person."
+          }
+        >
+          {starting
+            ? "Starting…"
+            : activeRun
+              ? "Enrichment in progress…"
+              : "Find more contact info"}
+        </Button>
+      </div>
+      {err && <p className="text-sm text-red-700 mt-2">{err}</p>}
+      {loading && !data && (
+        <p className="text-xs text-neutral-500 mt-2">Loading enrichment history…</p>
+      )}
+      {data && data.runs.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-neutral-600">
+            {data.runs.length} enrichment{" "}
+            {data.runs.length === 1 ? "run" : "runs"}
+            {data.suggested_contacts.length > 0 && (
+              <>
+                {" · "}
+                <strong>{data.suggested_contacts.length}</strong> suggested{" "}
+                {data.suggested_contacts.length === 1 ? "contact" : "contacts"}
+              </>
+            )}
+          </p>
+          {data.runs.map((r) => (
+            <div
+              key={r.id}
+              className="text-xs flex items-center gap-2 text-neutral-700"
+            >
+              <Badge
+                intent={
+                  r.status === "completed"
+                    ? "ok"
+                    : r.status === "failed" || r.status === "over_budget"
+                      ? "bad"
+                      : "info"
+                }
+              >
+                {r.status}
+              </Badge>
+              <span>
+                {r.pages_crawled} pages · {r.contacts_extracted} contacts ·
+                {" "}
+                {(r.cost_cents / 100).toFixed(2)}¢
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {data && data.suggested_contacts.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs font-medium text-neutral-700">
+            Suggestions found:
+          </p>
+          {data.suggested_contacts.map((c) => (
+            <div
+              key={c.id}
+              className="text-sm border rounded p-2 bg-neutral-50"
+            >
+              <div className="font-medium">{c.name}</div>
+              {c.title && <div className="text-xs text-neutral-600">{c.title}</div>}
+              <div className="text-xs mt-1">
+                {c.email && (
+                  <span className="mr-3">
+                    <span className="text-neutral-500">email:</span> {c.email}
+                  </span>
+                )}
+                {c.phone && (
+                  <span>
+                    <span className="text-neutral-500">phone:</span> {c.phone}
+                  </span>
+                )}
+                {!c.email && !c.phone && (
+                  <span className="text-neutral-500">
+                    no new contact info on this row
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+          <p className="text-xs text-neutral-500">
+            Apply useful info manually by editing this contact (above) — the
+            suggestions are not auto-merged.
+          </p>
+        </div>
+      )}
+      {data && data.runs.length === 0 && !loading && (
+        <p className="text-xs text-neutral-500 mt-2">
+          No enrichment runs yet. Click the button to start one.
+        </p>
       )}
     </div>
   );

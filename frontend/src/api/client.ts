@@ -116,6 +116,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action, payload }),
     }),
+  enrichContact: (id: string) =>
+    request<EnrichmentRun>(`/api/contacts/${id}/enrich`, { method: "POST" }),
+  getEnrichments: (id: string) =>
+    request<EnrichmentSummary>(`/api/contacts/${id}/enrichments`),
   // Suppressions
   listSuppressions: () => request<Suppression[]>("/api/suppressions"),
   createSuppression: (b: { type: string; value: string; reason: string }) =>
@@ -166,6 +170,24 @@ export interface Run {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+}
+
+export interface EnrichmentRun {
+  id: string;
+  status: string;
+  pages_crawled: number;
+  contacts_extracted: number;
+  cost_cents: number;
+  max_cost_cents: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface EnrichmentSummary {
+  parent_contact_id: string;
+  runs: EnrichmentRun[];
+  suggested_contacts: Contact[];
 }
 
 export interface RunStartResult {
