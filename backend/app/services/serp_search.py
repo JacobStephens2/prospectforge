@@ -14,6 +14,27 @@ the existing crawl behavior.
 Why this isn't in the main `lookup_via_api` waterfall: this returns a
 URL to crawl, not a contact record. It's a *locator* the crawler can
 use, not a vendor providing the email directly.
+
+## Brave Search API ToS compliance
+
+Brave's API terms prohibit storing, modifying, re-using, or re-selling
+the raw SERP responses; AI inference on responses is permitted only
+during the active subscription. We comply by:
+
+  - **Extracting only the URL** from each response and discarding the
+    rest immediately. The JSON body is never written to the DB, the
+    archive, or any cache.
+  - **Not implementing a SERP-response cache.** If you're tempted to
+    add one to reduce API spend: don't. The contract is per-query at
+    request time. If cost becomes an issue, the right move is to gate
+    SERP behind a "has the contact's org domain been SERP'd in the
+    last N days" check, where N tracks the *query*, not the response.
+  - **Treating downstream extraction of contact info from the linked
+    page as standard search use** — we visit a publicly-linked URL via
+    our own crawler, which is independent of the SERP API itself.
+
+Apply the same rules if you swap SerpAPI in: Google's ToS via SerpAPI
+has comparable storage restrictions.
 """
 
 from __future__ import annotations
