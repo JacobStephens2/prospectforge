@@ -120,7 +120,13 @@ def test_start_enrichment_run_falls_back_to_domain():
         db.close()
 
 
-def test_start_enrichment_run_raises_when_no_url():
+def test_start_enrichment_run_raises_when_no_url_and_freesearch_empty(monkeypatch):
+    """With no website AND no domain, the freesearch fallback runs. We
+    mock it to return None to assert the truly-unseedable error path."""
+    monkeypatch.setattr(
+        "app.services.enrichment_run.find_person_via_freesearch",
+        lambda name, org_name: None,
+    )
     db = SessionLocal()
     try:
         user = _make_user(db)
@@ -136,6 +142,34 @@ def test_start_enrichment_run_raises_when_no_url():
             start_enrichment_run(
                 db, contact_id=contact.id, requested_by_user_id=user.id
             )
+    finally:
+        db.close()
+
+
+def test_start_enrichment_run_uses_freesearch_fallback(monkeypatch):
+    """No website/domain but freesearch returns a URL → that becomes the
+    run seed and the Source row is labeled as a web-search enrichment."""
+    monkeypatch.setattr(
+        "app.services.enrichment_run.find_person_via_freesearch",
+        lambda name, org_name: "https://news.test/article-about-jane",
+    )
+    db = SessionLocal()
+    try:
+        user = _make_user(db)
+        src = _make_source(db, user)
+        run = _make_run(db, src, user)
+        org = Organization(run_id=run.id, name="No URL High")
+        db.add(org)
+        db.flush()
+        contact = _make_contact(db, run, org=org)
+        db.commit()
+
+        enr = start_enrichment_run(
+            db, contact_id=contact.id, requested_by_user_id=user.id
+        )
+        src_row = db.get(Source, enr.source_id)
+        assert src_row.url == "https://news.test/article-about-jane"
+        assert "web search" in src_row.name.lower()
     finally:
         db.close()
 

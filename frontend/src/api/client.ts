@@ -120,6 +120,11 @@ export const api = {
     request<EnrichmentRun>(`/api/contacts/${id}/enrich`, { method: "POST" }),
   getEnrichments: (id: string) =>
     request<EnrichmentSummary>(`/api/contacts/${id}/enrichments`),
+  bulkEnrich: (contact_ids: string[]) =>
+    request<BulkEnrichResult>(`/api/contacts/enrich/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ contact_ids }),
+    }),
   // Suppressions
   listSuppressions: () => request<Suppression[]>("/api/suppressions"),
   createSuppression: (b: { type: string; value: string; reason: string }) =>
@@ -188,6 +193,12 @@ export interface EnrichmentSummary {
   parent_contact_id: string;
   runs: EnrichmentRun[];
   suggested_contacts: Contact[];
+}
+
+export interface BulkEnrichResult {
+  requested: number;
+  started: number;
+  skipped: { contact_id: string; reason: string }[];
 }
 
 export interface RunStartResult {

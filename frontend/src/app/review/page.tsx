@@ -48,6 +48,14 @@ function emailConfidenceTitle(s: string): string {
   return s;
 }
 
+function formatBulkCost(n: number): string {
+  // Per-run budget cap is $0.50 (DEFAULT_ENRICHMENT_BUDGET_CENTS=50 in
+  // services/enrichment_run.py). Actual cost is usually much less because
+  // small targeted crawls don't exhaust the cap.
+  const max = (n * 0.5).toFixed(2);
+  return `up to $${max}`;
+}
+
 function dedupeBadge(s: string) {
   if (s === "exact" || s === "existing_customer" || s === "suppressed")
     return <Badge intent="bad">{s}</Badge>;
@@ -73,15 +81,32 @@ function ReviewInner() {
   const [runId, setRunId] = useState(initialRun);
   const [reviewStatus, setReviewStatus] = useState(initialStatus);
   const [dedupeStatus, setDedupeStatus] = useState("");
-  // "reachable" = has email OR phone. Default on — most of the time you
-  // don't want to see contacts you can't actually reach.
-  const [contactInfo, setContactInfo] = useState<"any" | "reachable" | "none">("reachable");
+  // Default is "any" (All); the user's last choice is persisted to
+  // localStorage and rehydrated on mount.
+  const [contactInfo, setContactInfo] = useState<"any" | "reachable" | "none">("any");
+  const [contactInfoHydrated, setContactInfoHydrated] = useState(false);
+  // Hydrate the contactInfo filter from localStorage on first client
+  // render. We intentionally skip the first auto-load until hydration
+  // completes so we don't fire an extra API call with the wrong default.
+  useEffect(() => {
+    const saved = window.localStorage.getItem("pf.review.contactInfo");
+    if (saved === "any" || saved === "reachable" || saved === "none") {
+      setContactInfo(saved);
+    }
+    setContactInfoHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!contactInfoHydrated) return;
+    window.localStorage.setItem("pf.review.contactInfo", contactInfo);
+  }, [contactInfo, contactInfoHydrated]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [bulkEnriching, setBulkEnriching] = useState(false);
+  const [bulkEnrichResult, setBulkEnrichResult] = useState<string | null>(null);
 
   // ESC closes the modal + lock body scroll while it's open so the page
   // underneath doesn't drift. Restoring on close keeps the row position.
@@ -111,8 +136,48 @@ function ReviewInner() {
     setContacts(rows);
   }
   useEffect(() => {
+    // Wait for localStorage rehydration before the first auto-load so we
+    // don't fire an extra request with the default filter then re-fire
+    // with the saved one immediately after.
+    if (!contactInfoHydrated) return;
     load();
-  }, [runId, reviewStatus, dedupeStatus, contactInfo]);
+  }, [runId, reviewStatus, dedupeStatus, contactInfo, contactInfoHydrated]);
+
+  async function bulkEnrich() {
+    if (contacts.length === 0) return;
+    const ids = contacts.map((c) => c.id);
+    const cost = formatBulkCost(ids.length);
+    if (
+      !confirm(
+        `Start ${ids.length} enrichment runs on the contacts currently visible?\n\n` +
+          `Approximate cost: ${cost} (per-run budget cap is $0.50; actual ` +
+          `cost is typically lower).\n\n` +
+          `Each runs in the background. Suggestions appear under each contact ` +
+          `in the detail modal when ready.\n\n` +
+          `Contacts whose organization has no website, no domain, and no ` +
+          `findable presence via web search will be skipped (you'll see a count).`,
+      )
+    ) {
+      return;
+    }
+    setBulkEnriching(true);
+    setBulkEnrichResult(null);
+    try {
+      // The backend caps each request at 500 ids; if a future view ever
+      // exceeds that we'd need to batch, but the listContacts limit is
+      // 200 today so we're well inside.
+      const result = await api.bulkEnrich(ids);
+      const parts = [`Started ${result.started}`];
+      if (result.skipped.length > 0) {
+        parts.push(`skipped ${result.skipped.length} (no seedable org)`);
+      }
+      setBulkEnrichResult(parts.join(" · "));
+    } catch (e) {
+      setBulkEnrichResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setBulkEnriching(false);
+    }
+  }
 
   async function act(c: Contact, action: string) {
     setBusy(c.id);
@@ -305,7 +370,7 @@ function ReviewInner() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-baseline gap-3">
+        <div className="flex items-baseline gap-3 flex-wrap">
           <h1>Review queue</h1>
           <span className="text-sm text-neutral-600">
             <strong>{contacts.length}</strong> matching{" "}
@@ -319,8 +384,25 @@ function ReviewInner() {
               </span>
             )}
           </span>
+          {bulkEnrichResult && (
+            <span className="text-sm text-brand-green">{bulkEnrichResult}</span>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="secondary"
+            onClick={bulkEnrich}
+            disabled={bulkEnriching || contacts.length === 0}
+            title={
+              contacts.length === 0
+                ? "No contacts in the current filter view"
+                : `Run enrichment on the ${contacts.length} contacts currently visible. Approximate cost: ${formatBulkCost(contacts.length)}. Each enrichment runs in the background; suggestions appear under each contact in the detail modal when ready.`
+            }
+          >
+            {bulkEnriching
+              ? "Starting…"
+              : `Enrich ${contacts.length} visible`}
+          </Button>
           <Button
             variant="secondary"
             onClick={exportApprovedCsv}

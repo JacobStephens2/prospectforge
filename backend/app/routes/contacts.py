@@ -325,6 +325,80 @@ def post_enrich(
     return EnrichmentRunOut.model_validate(run)
 
 
+class BulkEnrichBody(BaseModel):
+    """Bulk enrichment request — start an enrichment run for each contact_id.
+
+    Hard cap below MAX_BULK_ENRICH_IDS so a misclick on a 500-contact view
+    can't kick off thousands of runs. If you want more, send multiple
+    batches and confirm budget between each.
+    """
+
+    contact_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+
+
+class BulkEnrichSkip(BaseModel):
+    contact_id: uuid.UUID
+    reason: str
+
+
+class BulkEnrichResult(BaseModel):
+    requested: int
+    started: int
+    skipped: list[BulkEnrichSkip]
+
+
+@router.post(
+    "/enrich/bulk",
+    response_model=BulkEnrichResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def post_bulk_enrich(
+    body: BulkEnrichBody,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkEnrichResult:
+    """Kick off enrichment runs for many contacts at once. Each run is
+    fire-and-forget in its own background thread, same shape as the
+    per-contact /enrich endpoint. Contacts whose org has no website AND
+    no domain AND no SERP free-search hit get skipped with a per-row
+    reason so the UI can show what failed.
+
+    Bounded at MAX_BULK_ENRICH_IDS contacts per request — the cap is
+    enforced both by Pydantic max_length and the explicit check below
+    for defense in depth.
+    """
+    import threading
+
+    from app.routes.runs import _run_in_background
+
+    skipped: list[BulkEnrichSkip] = []
+    run_ids_to_start: list[uuid.UUID] = []
+    for cid in body.contact_ids:
+        try:
+            run = start_enrichment_run(
+                db,
+                contact_id=cid,
+                requested_by_user_id=user.id,
+            )
+            run_ids_to_start.append(run.id)
+        except EnrichmentNotPossible as exc:
+            skipped.append(BulkEnrichSkip(contact_id=cid, reason=str(exc)))
+
+    # All runs are persisted in 'pending' before we fan out threads —
+    # otherwise a request-aborting client could leave us with started
+    # threads referencing run rows that aren't committed yet.
+    for rid in run_ids_to_start:
+        threading.Thread(
+            target=_run_in_background, args=(rid,), daemon=True
+        ).start()
+
+    return BulkEnrichResult(
+        requested=len(body.contact_ids),
+        started=len(run_ids_to_start),
+        skipped=skipped,
+    )
+
+
 @router.get(
     "/{contact_id}/enrichments", response_model=EnrichmentSummary
 )
