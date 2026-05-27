@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 from sqlalchemy import select, text
@@ -5,8 +7,11 @@ from sqlalchemy.orm import Session
 
 from app import routes
 from app.config import settings
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import PromptVersion
+from app.services.startup_recovery import recover_orphaned_runs
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ProspectForge API",
@@ -14,6 +19,23 @@ app = FastAPI(
     description="Acme's contact-sourcing tool. See spec §18 DAG.",
 )
 routes.register(app)
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """One-shot recovery sweep for runs orphaned by a previous process exit.
+
+    Background orchestrator threads are killed by SIGTERM when the
+    container restarts, leaving ProspectRun rows stuck in 'running'.
+    Stamp them failed so the UI shows truth and the operator can re-run.
+    """
+    db = SessionLocal()
+    try:
+        recover_orphaned_runs(db)
+    except Exception:  # noqa: BLE001
+        log.exception("orphaned-run recovery failed at startup")
+    finally:
+        db.close()
 
 
 class HealthResponse(BaseModel):
