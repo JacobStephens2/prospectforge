@@ -48,6 +48,55 @@ function emailConfidenceTitle(s: string): string {
   return s;
 }
 
+/**
+ * Build a plain-text snapshot of a contact for pasting into an AI agent.
+ * Markdown-ish key:value format works well for both human reading and LLM
+ * parsing; no fenced code blocks because the user is likely already pasting
+ * INTO an LLM chat where the message itself becomes the prompt.
+ *
+ * Fields are ordered "identity first, then context, then provenance" so an
+ * agent can stop reading once it has what it needs.
+ */
+function formatContactForAI(c: Contact): string {
+  const lines: string[] = [];
+  lines.push("ProspectForge contact record (Acme Acme Travel)");
+  lines.push("");
+  lines.push(`Name: ${c.name}`);
+  lines.push(`Title: ${c.title ?? "(unknown)"}`);
+  lines.push(`Email: ${c.email ?? "(none on file)"}`);
+  if (c.email && c.email_confidence) {
+    lines.push(`  Email confidence: ${c.email_confidence}`);
+  }
+  if (c.alt_email) lines.push(`Alt email: ${c.alt_email}`);
+  lines.push(`Phone: ${c.phone ?? "(none on file)"}`);
+  if (c.segment_tag) lines.push(`Segment: ${c.segment_tag}`);
+  lines.push("");
+  lines.push(`Dedupe status: ${c.dedupe_status}`);
+  if (c.dedupe_reason) lines.push(`  Reason: ${c.dedupe_reason}`);
+  lines.push(`Review status: ${c.review_status}`);
+  lines.push(
+    `Previously exported: ${c.previously_exported ? "yes" : "no"}`,
+  );
+  lines.push("");
+  lines.push("Source provenance:");
+  lines.push(
+    `  Page URL: ${c.source_page_url ?? "(unknown)"}`,
+  );
+  if (c.evidence_excerpt) {
+    lines.push(
+      `  Evidence (${c.evidence_verified}${c.evidence_match_score !== null ? `, score ${c.evidence_match_score.toFixed(2)}` : ""}):`,
+    );
+    // Indent each line of the excerpt so paragraph breaks don't merge
+    // visually with the rest of the format.
+    const indented = c.evidence_excerpt
+      .split("\n")
+      .map((l) => `  > ${l}`)
+      .join("\n");
+    lines.push(indented);
+  }
+  return lines.join("\n");
+}
+
 function seedSourceLabel(s: string): string {
   if (s === "org_website") return "org website";
   if (s === "serp_site") return "SERP on org domain";
@@ -114,6 +163,7 @@ function ReviewInner() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [bulkEnriching, setBulkEnriching] = useState(false);
   const [bulkEnrichResult, setBulkEnrichResult] = useState<string | null>(null);
+  const [copiedForAI, setCopiedForAI] = useState(false);
 
   // ESC closes the modal + lock body scroll while it's open so the page
   // underneath doesn't drift. Restoring on close keeps the row position.
@@ -130,6 +180,23 @@ function ReviewInner() {
       document.body.style.overflow = prevOverflow;
     };
   }, [selected]);
+
+  // Reset the copied-flag any time the user switches contact in the modal,
+  // so reopening on a different row shows "Copy for AI" not "Copied!".
+  useEffect(() => {
+    setCopiedForAI(false);
+  }, [selected?.id]);
+
+  async function copyForAI() {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(formatContactForAI(selected));
+      setCopiedForAI(true);
+      setTimeout(() => setCopiedForAI(false), 2000);
+    } catch (e) {
+      alert(`Couldn't copy to clipboard: ${(e as Error).message}`);
+    }
+  }
 
   async function load() {
     const rows = await api.listContacts({
@@ -502,11 +569,20 @@ function ReviewInner() {
           }}
         >
         <Card className="mt-12 w-full max-w-2xl shadow-xl">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h3 id="contact-detail-title">{selected.name}</h3>
-            <Button variant="ghost" onClick={() => setSelected(null)}>
-              Close
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={copyForAI}
+                title="Copy this contact's details to the clipboard as plain-text key:value pairs, ready to paste into Claude / ChatGPT / any AI agent"
+              >
+                {copiedForAI ? "Copied!" : "Copy for AI"}
+              </Button>
+              <Button variant="ghost" onClick={() => setSelected(null)}>
+                Close
+              </Button>
+            </div>
           </div>
           <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
             <dt className="text-neutral-500">Title</dt>
