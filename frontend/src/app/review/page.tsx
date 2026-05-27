@@ -48,6 +48,13 @@ function emailConfidenceTitle(s: string): string {
   return s;
 }
 
+function seedSourceLabel(s: string): string {
+  if (s === "org_website") return "org website";
+  if (s === "serp_site") return "SERP on org domain";
+  if (s === "serp_freesearch") return "web search";
+  return s;
+}
+
 function formatBulkCost(n: number): string {
   // Per-run budget cap is $0.50 (DEFAULT_ENRICHMENT_BUDGET_CENTS=50 in
   // services/enrichment_run.py). Actual cost is usually much less because
@@ -670,29 +677,131 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
               </>
             )}
           </p>
-          {data.runs.map((r) => (
-            <div
-              key={r.id}
-              className="text-xs flex items-center gap-2 text-neutral-700"
-            >
-              <Badge
-                intent={
-                  r.status === "completed"
-                    ? "ok"
-                    : r.status === "failed" || r.status === "over_budget"
-                      ? "bad"
-                      : "info"
-                }
+          {data.runs.map((r) => {
+            const crawledSet = new Set(r.crawled_pages.map((p) => p.url));
+            return (
+              <div
+                key={r.id}
+                className="text-xs border rounded p-3 bg-neutral-50 space-y-2"
               >
-                {r.status}
-              </Badge>
-              <span>
-                {r.pages_crawled} pages · {r.contacts_extracted} contacts ·
-                {" "}
-                {(r.cost_cents / 100).toFixed(2)}¢
-              </span>
-            </div>
-          ))}
+                <div className="flex items-center gap-2 text-neutral-700">
+                  <Badge
+                    intent={
+                      r.status === "completed"
+                        ? "ok"
+                        : r.status === "failed" || r.status === "over_budget"
+                          ? "bad"
+                          : "info"
+                    }
+                  >
+                    {r.status}
+                  </Badge>
+                  <span>
+                    {r.pages_crawled} pages · {r.contacts_extracted} contacts ·
+                    {" "}
+                    {(r.cost_cents / 100).toFixed(2)}¢
+                  </span>
+                  {r.seed_source && (
+                    <span title="How this enrichment's seed URL was chosen">
+                      <Badge intent="neutral">
+                        seed: {seedSourceLabel(r.seed_source)}
+                      </Badge>
+                    </span>
+                  )}
+                </div>
+
+                {r.serp_attempts.length > 0 && (
+                  <div className="space-y-1">
+                    {r.serp_attempts.map((a, i) => (
+                      <div key={i} className="space-y-0.5">
+                        <div className="text-neutral-600">
+                          <span className="font-medium">SERP {a.provider || "—"}:</span>{" "}
+                          <code className="font-mono text-[11px] bg-white px-1 py-0.5 rounded border">
+                            {a.query || "(empty)"}
+                          </code>
+                          {a.note && (
+                            <span className="text-neutral-500 ml-2">
+                              ({a.note})
+                            </span>
+                          )}
+                        </div>
+                        {a.urls.length > 0 ? (
+                          <ul className="ml-4 space-y-0.5">
+                            {a.urls.slice(0, 5).map((u) => (
+                              <li key={u} className="flex items-baseline gap-2">
+                                <Badge
+                                  intent={crawledSet.has(u) ? "ok" : "neutral"}
+                                >
+                                  {crawledSet.has(u) ? "crawled" : "skipped"}
+                                </Badge>
+                                <a
+                                  href={u}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="break-all text-brand-blue hover:underline"
+                                >
+                                  {u}
+                                </a>
+                              </li>
+                            ))}
+                            {a.urls.length > 5 && (
+                              <li className="text-neutral-500">
+                                …{a.urls.length - 5} more
+                              </li>
+                            )}
+                          </ul>
+                        ) : (
+                          <p className="ml-4 text-neutral-500 italic">
+                            no results
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {r.crawled_pages.length > 0 && (
+                  <details className="text-neutral-700">
+                    <summary className="cursor-pointer text-neutral-600">
+                      Crawled pages ({r.crawled_pages.length})
+                    </summary>
+                    <ul className="mt-1 ml-4 space-y-0.5">
+                      {r.crawled_pages.map((p) => (
+                        <li key={p.url} className="flex items-baseline gap-2">
+                          <Badge
+                            intent={
+                              p.status === "fetched"
+                                ? "ok"
+                                : p.status === "error" ||
+                                    p.status.startsWith("blocked")
+                                  ? "bad"
+                                  : "warn"
+                            }
+                          >
+                            {p.status}
+                            {p.http_status && ` ${p.http_status}`}
+                          </Badge>
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all text-brand-blue hover:underline"
+                          >
+                            {p.url}
+                          </a>
+                          {p.error && (
+                            <span className="text-red-700 text-[11px]">
+                              {p.error}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {data && data.suggested_contacts.length > 0 && (

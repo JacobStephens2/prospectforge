@@ -28,7 +28,11 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Contact, Organization, ProspectRun, Source
-from app.services.serp_search import find_person_page, find_person_via_freesearch
+from app.services.serp_search import (
+    SerpTrace,
+    find_person_page_traced,
+    find_person_via_freesearch_traced,
+)
 
 log = logging.getLogger(__name__)
 
@@ -85,10 +89,13 @@ def start_enrichment_run(
 
     # SERP Tier-0: try to locate a single high-relevance page on the org
     # domain for this person before falling back to a broad crawl. When
-    # no SERP provider is configured (default), find_person_page returns
-    # None and we use the org-root seed unchanged.
-    serp_seed = None
+    # no SERP provider is configured (default), the traced variant returns
+    # (None, SerpTrace(...note="no provider configured")) and we use the
+    # org-root seed unchanged. Traces are persisted on the run so the UI
+    # can show what was searched and what came back.
+    serp_seed: str | None = None
     seed_source = "org_website"  # for log/audit clarity
+    serp_traces: list[SerpTrace] = []
     domain_for_serp = org.domain if (org and org.domain) else None
     if domain_for_serp is None and seed_url:
         # Pull domain off the resolved URL as a fallback.
@@ -96,7 +103,10 @@ def start_enrichment_run(
         domain_for_serp = _urlparse(seed_url).netloc or None
     if domain_for_serp:
         try:
-            serp_seed = find_person_page(contact.name, domain_for_serp)
+            serp_seed, trace = find_person_page_traced(
+                contact.name, domain_for_serp
+            )
+            serp_traces.append(trace)
             if serp_seed:
                 seed_source = "serp_site"
         except Exception as exc:  # noqa: BLE001 — never fail the run on SERP error
@@ -108,7 +118,10 @@ def start_enrichment_run(
     # don't 400 just because the org lacks a registered URL — go look.
     if seed_url is None and serp_seed is None and org is not None and org.name:
         try:
-            serp_seed = find_person_via_freesearch(contact.name, org.name)
+            serp_seed, trace = find_person_via_freesearch_traced(
+                contact.name, org.name
+            )
+            serp_traces.append(trace)
             if serp_seed:
                 seed_source = "serp_freesearch"
         except Exception as exc:  # noqa: BLE001
@@ -149,6 +162,20 @@ def start_enrichment_run(
     db.add(source)
     db.flush()
 
+    enrichment_context = {
+        "seed_source": seed_source,
+        "seed_url": effective_seed,
+        "serp_attempts": [
+            {
+                "query": t.query,
+                "provider": t.provider,
+                "urls": list(t.urls),
+                "note": t.note,
+            }
+            for t in serp_traces
+        ],
+    }
+
     run = ProspectRun(
         source_id=source.id,
         created_by=requested_by_user_id,
@@ -156,6 +183,7 @@ def start_enrichment_run(
         budget_approved_by=requested_by_user_id,
         budget_approved_at=datetime.now(timezone.utc),
         enrichment_for_contact_id=contact.id,
+        enrichment_context=enrichment_context,
     )
     db.add(run)
     db.commit()

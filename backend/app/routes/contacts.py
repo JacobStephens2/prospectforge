@@ -262,6 +262,19 @@ def review_contact(
 # ---------- per-contact enrichment ----------
 
 
+class EnrichmentSerpAttempt(BaseModel):
+    """One SERP query the enrichment attempted, with the URLs returned.
+
+    Surfaced in the UI so reviewers can see what was searched and which
+    candidates Brave/SerpAPI returned — useful for triaging runs that
+    found no contacts (was the query bad? did SERP return junk?)."""
+
+    query: str
+    provider: str
+    urls: list[str]
+    note: str = ""
+
+
 class EnrichmentRunOut(BaseModel):
     """Minimal projection of a ProspectRun, scoped to the enrichment surface."""
 
@@ -274,8 +287,23 @@ class EnrichmentRunOut(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    # Trace of how the seed was picked + every SERP query attempted.
+    seed_source: str | None = None
+    seed_url: str | None = None
+    serp_attempts: list[EnrichmentSerpAttempt] = []
+    # URLs actually fetched by the orchestrator (one per source_page row).
+    crawled_pages: list["EnrichmentCrawledPage"] = []
 
     model_config = {"from_attributes": True}
+
+
+class EnrichmentCrawledPage(BaseModel):
+    """A single page the enrichment crawl fetched."""
+
+    url: str
+    status: str          # fetched | blocked_robots | blocked_ssrf | error | ...
+    http_status: int | None = None
+    error: str | None = None
 
 
 class EnrichmentSummary(BaseModel):
@@ -407,8 +435,11 @@ def get_enrichments(
     _user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> EnrichmentSummary:
-    """Return all enrichment runs that targeted this contact and the
-    contacts those runs produced as suggestions."""
+    """Return all enrichment runs that targeted this contact, the SERP
+    trace + crawled-page list per run, and the contacts those runs
+    produced as suggestions."""
+    from app.models import SourcePage
+
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
@@ -416,8 +447,51 @@ def get_enrichments(
     runs = list_enrichment_runs(db, parent_contact_id=contact_id)
     suggestions = list_enrichment_results(db, parent_contact_id=contact_id)
 
+    # Batch-fetch source_pages for all runs at once rather than N queries.
+    run_ids = [r.id for r in runs]
+    pages_by_run: dict[uuid.UUID, list[SourcePage]] = {rid: [] for rid in run_ids}
+    if run_ids:
+        rows = (
+            db.query(SourcePage)
+            .filter(SourcePage.run_id.in_(run_ids))
+            .order_by(SourcePage.created_at.asc())
+            .all()
+        )
+        for p in rows:
+            pages_by_run.setdefault(p.run_id, []).append(p)
+
+    runs_out: list[EnrichmentRunOut] = []
+    for r in runs:
+        ctx = r.enrichment_context or {}
+        attempts = [
+            EnrichmentSerpAttempt(
+                query=a.get("query", ""),
+                provider=a.get("provider", ""),
+                urls=list(a.get("urls") or []),
+                note=a.get("note", ""),
+            )
+            for a in (ctx.get("serp_attempts") or [])
+        ]
+        crawled = [
+            EnrichmentCrawledPage(
+                url=p.url,
+                status=p.status,
+                http_status=p.http_status,
+                error=(p.page_metadata or {}).get("error")
+                if isinstance(p.page_metadata, dict)
+                else None,
+            )
+            for p in pages_by_run.get(r.id, [])
+        ]
+        run_out = EnrichmentRunOut.model_validate(r)
+        run_out.seed_source = ctx.get("seed_source")
+        run_out.seed_url = ctx.get("seed_url")
+        run_out.serp_attempts = attempts
+        run_out.crawled_pages = crawled
+        runs_out.append(run_out)
+
     return EnrichmentSummary(
         parent_contact_id=contact_id,
-        runs=[EnrichmentRunOut.model_validate(r) for r in runs],
+        runs=runs_out,
         suggested_contacts=_hydrate(db, suggestions),
     )

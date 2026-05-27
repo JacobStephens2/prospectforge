@@ -40,11 +40,28 @@ has comparable storage restrictions.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import httpx
 
 from app.config import settings
+
+
+@dataclass(frozen=True)
+class SerpTrace:
+    """Auditable record of a single SERP attempt.
+
+    Fields are intentionally minimal — query string + URL list only, no
+    raw response payload. Matches what's safe to persist under Brave's ToS
+    (storing URLs we'd then crawl is normal use; storing the API JSON
+    body is not). Empty `urls` means the SERP returned no results for
+    this query."""
+
+    query: str
+    urls: tuple[str, ...] = field(default_factory=tuple)
+    provider: str = ""
+    note: str = ""   # human-readable, e.g. "loose retry" or "no provider"
 
 log = logging.getLogger(__name__)
 
@@ -188,24 +205,54 @@ def find_person_via_freesearch(name: str, org_name: str) -> str | None:
     fine crawl targets, some are not (LinkedIn blocks bots). We don't
     filter here — the crawler tolerates getting nothing useful back.
     """
+    pick, _trace = find_person_via_freesearch_traced(name, org_name)
+    return pick
+
+
+def find_person_via_freesearch_traced(
+    name: str, org_name: str
+) -> tuple[str | None, SerpTrace]:
+    """Traced variant of find_person_via_freesearch — returns the SerpTrace
+    so the enrichment UI can show what was searched and what came back.
+    The trace's query reflects whichever variant (strict or loose) ended
+    up producing the result list."""
+    strict_query = (
+        _build_freesearch_query(name, org_name) if (name and org_name) else ""
+    )
     if not name or not org_name:
-        return None
-    urls = _query_freesearch(name, org_name)
+        return None, SerpTrace(query=strict_query, note="empty name or org name")
+    provider = settings.serp_provider.lower().strip()
+    if provider not in ("brave", "serpapi"):
+        return None, SerpTrace(
+            query=strict_query, provider=provider, note="no provider configured"
+        )
+    dispatch = _query_brave_raw if provider == "brave" else _query_serpapi_raw
+
+    urls = dispatch(strict_query)
+    note = ""
+    used_query = strict_query
+    if not urls:
+        loose_query = _build_freesearch_query_loose(name, org_name)
+        urls = dispatch(loose_query)
+        used_query = loose_query
+        note = "loose retry after strict returned empty"
+
     if not urls:
         log.info(
-            "SERP free-search returned no results for %r at %r",
-            name,
-            org_name,
+            "SERP free-search returned no results for %r at %r", name, org_name
         )
-        return None
+        return None, SerpTrace(
+            query=used_query,
+            urls=tuple(),
+            provider=provider,
+            note=note or "no results",
+        )
+
     pick = urls[0]
-    log.info(
-        "SERP free-search hit for %r at %r → %s",
-        name,
-        org_name,
-        pick,
+    log.info("SERP free-search hit for %r at %r → %s", name, org_name, pick)
+    return pick, SerpTrace(
+        query=used_query, urls=tuple(urls), provider=provider, note=note
     )
-    return pick
 
 
 def find_person_page(name: str, domain: str) -> str | None:
@@ -217,20 +264,31 @@ def find_person_page(name: str, domain: str) -> str | None:
     single-person hunts. Future improvement: prefer URLs whose path
     matches the URL-score heuristic (staff/faculty/contact tokens).
     """
+    pick, _trace = find_person_page_traced(name, domain)
+    return pick
+
+
+def find_person_page_traced(name: str, domain: str) -> tuple[str | None, SerpTrace]:
+    """Traced variant: returns (picked_url, SerpTrace) so callers that need
+    to surface what was searched and what came back (the enrichment UI)
+    can persist the full context. Same selection logic as find_person_page."""
+    query = _build_query(name, domain) if (name and domain) else ""
     if not name or not domain:
-        return None
+        return None, SerpTrace(query=query, note="empty name or domain")
     provider = settings.serp_provider.lower().strip()
     if not provider:
-        return None
-
+        return None, SerpTrace(query=query, note="no provider configured")
     if provider == "brave":
-        raw_urls = _query_brave(name, domain)
+        raw_urls = _query_brave_raw(query)
     elif provider == "serpapi":
-        raw_urls = _query_serpapi(name, domain)
+        raw_urls = _query_serpapi_raw(query)
     else:
         log.warning("unknown SERP provider: %r", provider)
-        return None
+        return None, SerpTrace(
+            query=query, provider=provider, note=f"unknown provider {provider!r}"
+        )
 
+    trace = SerpTrace(query=query, urls=tuple(raw_urls), provider=provider)
     same_domain = _filter_same_domain(raw_urls, domain)
     if not same_domain:
         log.info(
@@ -239,7 +297,12 @@ def find_person_page(name: str, domain: str) -> str | None:
             domain,
             len(raw_urls),
         )
-        return None
+        return None, SerpTrace(
+            query=query,
+            urls=tuple(raw_urls),
+            provider=provider,
+            note="no same-domain hits",
+        )
     pick = same_domain[0]
     log.info("SERP Tier-0 hit for %s @ %s → %s", name, domain, pick)
-    return pick
+    return pick, trace

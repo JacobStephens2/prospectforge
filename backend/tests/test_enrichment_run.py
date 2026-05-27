@@ -122,10 +122,13 @@ def test_start_enrichment_run_falls_back_to_domain():
 
 def test_start_enrichment_run_raises_when_no_url_and_freesearch_empty(monkeypatch):
     """With no website AND no domain, the freesearch fallback runs. We
-    mock it to return None to assert the truly-unseedable error path."""
+    mock it to return (None, empty-trace) to assert the truly-unseedable
+    error path."""
+    from app.services.serp_search import SerpTrace
+
     monkeypatch.setattr(
-        "app.services.enrichment_run.find_person_via_freesearch",
-        lambda name, org_name: None,
+        "app.services.enrichment_run.find_person_via_freesearch_traced",
+        lambda name, org_name: (None, SerpTrace(query="x", note="mock empty")),
     )
     db = SessionLocal()
     try:
@@ -149,9 +152,18 @@ def test_start_enrichment_run_raises_when_no_url_and_freesearch_empty(monkeypatc
 def test_start_enrichment_run_uses_freesearch_fallback(monkeypatch):
     """No website/domain but freesearch returns a URL → that becomes the
     run seed and the Source row is labeled as a web-search enrichment."""
+    from app.services.serp_search import SerpTrace
+
     monkeypatch.setattr(
-        "app.services.enrichment_run.find_person_via_freesearch",
-        lambda name, org_name: "https://news.test/article-about-jane",
+        "app.services.enrichment_run.find_person_via_freesearch_traced",
+        lambda name, org_name: (
+            "https://news.test/article-about-jane",
+            SerpTrace(
+                query='"Jane Smith" "No URL High"',
+                provider="brave",
+                urls=("https://news.test/article-about-jane",),
+            ),
+        ),
     )
     db = SessionLocal()
     try:

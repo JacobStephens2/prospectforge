@@ -177,6 +177,20 @@ export interface Run {
   created_at: string;
 }
 
+export interface EnrichmentSerpAttempt {
+  query: string;
+  provider: string;
+  urls: string[];
+  note: string;
+}
+
+export interface EnrichmentCrawledPage {
+  url: string;
+  status: string;
+  http_status: number | null;
+  error: string | null;
+}
+
 export interface EnrichmentRun {
   id: string;
   status: string;
@@ -187,6 +201,10 @@ export interface EnrichmentRun {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  seed_source: string | null;
+  seed_url: string | null;
+  serp_attempts: EnrichmentSerpAttempt[];
+  crawled_pages: EnrichmentCrawledPage[];
 }
 
 export interface EnrichmentSummary {

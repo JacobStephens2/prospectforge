@@ -135,6 +135,14 @@ class ProspectRun(Base):
         UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Trace of how the enrichment seed was chosen — SERP query, the URLs
+    # Brave returned, the URL we picked, and seed_source ('org_website' |
+    # 'serp_site' | 'serp_freesearch'). NULL for non-enrichment runs.
+    # Per Brave ToS: query string + URL/title only, never the raw response.
+    enrichment_context: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )

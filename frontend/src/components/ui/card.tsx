@@ -12,7 +12,13 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // p-5 (not py-4) so Cards have horizontal breathing room by
+        // default. Every Card in this app takes children directly rather
+        // than wrapping in CardContent — without px the text touches the
+        // edges (especially noticeable in the /review detail modal).
+        // Cards that genuinely need zero padding (e.g. table wrappers)
+        // override with `p-0` in their className.
+        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card p-5 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:p-4 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className
       )}
       {...props}
