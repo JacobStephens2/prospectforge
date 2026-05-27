@@ -43,6 +43,17 @@ class Settings(BaseSettings):
 
     sentry_dsn: str = ""
 
+    # SERP Tier-0 for per-contact enrichment. When a provider key is set,
+    # enrichment_run uses `site:domain "Name"` to locate the single person
+    # page before falling back to a broad org-domain crawl. Empty = disabled
+    # (returns no candidate → crawl runs unchanged). Brave preferred over
+    # SerpAPI when both set (cheaper, generous free tier).
+    serp_provider: str = ""           # "brave" | "serpapi" | ""
+    serp_brave_api_key: str = ""
+    serp_serpapi_api_key: str = ""
+    serp_request_timeout_secs: float = 8.0
+    serp_max_results_inspected: int = 5
+
     # Auth / email
     app_public_url: str = "https://prospect.acme-travel.example"
     smtp_host: str = "smtp.mandrillapp.com"

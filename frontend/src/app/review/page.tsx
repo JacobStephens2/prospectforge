@@ -26,6 +26,28 @@ function badge(s: string) {
   return <Badge>{s}</Badge>;
 }
 
+function emailConfidenceIntent(s: string): "ok" | "warn" | "bad" | "info" | "neutral" {
+  if (s === "verified") return "ok";
+  if (s === "pattern_guess") return "warn";
+  // Catch-all: domain accepts any local-part at SMTP, validator can't
+  // distinguish real mailbox from anything-goes. Color it "bad" so it
+  // visually separates from "verified" — sending here risks deliverability.
+  if (s === "unverifiable_catchall") return "bad";
+  return "neutral";
+}
+
+function emailConfidenceTitle(s: string): string {
+  if (s === "verified") return "Confirmed via validator — safe to send";
+  if (s === "pattern_guess")
+    return "Inferred from a domain email pattern — verify before sending";
+  if (s === "unverifiable_catchall")
+    return (
+      "Domain is a catch-all (SMTP accepts any local-part) — validator can't " +
+      "confirm this mailbox exists. Sending risks soft-bounce or spam complaint."
+    );
+  return s;
+}
+
 function dedupeBadge(s: string) {
   if (s === "exact" || s === "existing_customer" || s === "suppressed")
     return <Badge intent="bad">{s}</Badge>;
@@ -404,9 +426,11 @@ function ReviewInner() {
             <dd>
               {selected.email ?? "—"}
               {selected.email_confidence && (
-                <Badge intent={selected.email_confidence === "verified" ? "ok" : "warn"}>
-                  {selected.email_confidence}
-                </Badge>
+                <span title={emailConfidenceTitle(selected.email_confidence)}>
+                  <Badge intent={emailConfidenceIntent(selected.email_confidence)}>
+                    {selected.email_confidence}
+                  </Badge>
+                </span>
               )}
             </dd>
             <dt className="text-neutral-500">Phone</dt>

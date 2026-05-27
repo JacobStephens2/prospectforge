@@ -248,7 +248,10 @@ class Contact(Base):
     email: Mapped[str | None] = mapped_column(Text, nullable=True)
     alt_email: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_confidence: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # verified | pattern_guess | null
+    # verified | pattern_guess | unverifiable_catchall | null
+    # 'unverifiable_catchall' = a validator confirmed the domain accepts any
+    # local-part (catch-all SMTP), so the address cannot be confirmed even
+    # though it didn't bounce. Surface distinctly to reviewers.
     phone: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     evidence_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Contact, Organization, ProspectRun, Source
+from app.services.serp_search import find_person_page
 
 log = logging.getLogger(__name__)
 
@@ -87,11 +88,29 @@ def start_enrichment_run(
             "set one before requesting enrichment"
         )
 
+    # SERP Tier-0: try to locate a single high-relevance page on the org
+    # domain for this person before falling back to a broad crawl. When
+    # no SERP provider is configured (default), find_person_page returns
+    # None and we use the org-root seed unchanged.
+    serp_seed = None
+    domain_for_serp = org.domain if (org and org.domain) else None
+    if domain_for_serp is None and seed_url:
+        # Pull domain off the resolved URL as a fallback.
+        from urllib.parse import urlparse as _urlparse
+        domain_for_serp = _urlparse(seed_url).netloc or None
+    if domain_for_serp:
+        try:
+            serp_seed = find_person_page(contact.name, domain_for_serp)
+        except Exception as exc:  # noqa: BLE001 — never fail the run on SERP error
+            log.warning("SERP Tier-0 errored for %s: %s", contact.name, exc)
+
+    effective_seed = serp_seed or seed_url
+
     # One-off Source: inactive so it doesn't show in Morgan's source list
     # but the lineage (which run came from where) is preserved.
     source = Source(
         name=f"Enrichment: {contact.name}",
-        url=seed_url,
+        url=effective_seed,
         crawl_tier=1,
         follow_external_links=False,
         max_external_pages=0,
@@ -113,10 +132,11 @@ def start_enrichment_run(
     db.commit()
     db.refresh(run)
     log.info(
-        "enrichment run %s created for contact %s (seed=%s, budget=%d¢)",
+        "enrichment run %s created for contact %s (seed=%s, serp_used=%s, budget=%d¢)",
         run.id,
         contact.id,
-        seed_url,
+        effective_seed,
+        serp_seed is not None,
         budget_cents,
     )
     return run
