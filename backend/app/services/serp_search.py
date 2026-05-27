@@ -64,6 +64,21 @@ def _build_query(name: str, domain: str) -> str:
     return f'site:{domain} "{name.strip()}"'
 
 
+def _build_freesearch_query(name: str, org_name: str) -> str:
+    """Strict free-form query when no org domain is known. Both name and org
+    are phrase-quoted so the SERP treats them as exact phrases — strongest
+    disambiguation signal between two people of the same name."""
+    return f'"{name.strip()}" "{org_name.strip()}"'
+
+
+def _build_freesearch_query_loose(name: str, org_name: str) -> str:
+    """Looser variant for when the strict double-quoted query is too narrow
+    (Brave returns bad_results=true on rare unindexed phrases). Keeps the
+    name in quotes but drops quotes around the org name so it acts as
+    relevance signal, not a hard filter."""
+    return f'"{name.strip()}" {org_name.strip()}'
+
+
 def _filter_same_domain(urls: list[str], domain: str) -> list[str]:
     """Drop any URLs that aren't on the target domain. SERPs sometimes
     return tangential pages (cached copies, scrapers) we don't want."""
@@ -78,17 +93,17 @@ def _filter_same_domain(urls: list[str], domain: str) -> list[str]:
     return out
 
 
-def _query_brave(name: str, domain: str) -> list[str]:
+def _query_brave_raw(query: str) -> list[str]:
+    """Issue any query string against Brave Web Search; return URLs in
+    relevance order. Lower-level than _query_brave so callers can build
+    site:domain queries or free-form queries through the same path."""
     if not settings.serp_brave_api_key:
         return []
     headers = {
         "Accept": "application/json",
         "X-Subscription-Token": settings.serp_brave_api_key,
     }
-    params = {
-        "q": _build_query(name, domain),
-        "count": settings.serp_max_results_inspected,
-    }
+    params = {"q": query, "count": settings.serp_max_results_inspected}
     try:
         with httpx.Client(timeout=settings.serp_request_timeout_secs) as cli:
             resp = cli.get(_BRAVE_ENDPOINT, headers=headers, params=params)
@@ -104,12 +119,13 @@ def _query_brave(name: str, domain: str) -> list[str]:
     return [r.get("url") for r in results if r.get("url")]
 
 
-def _query_serpapi(name: str, domain: str) -> list[str]:
+def _query_serpapi_raw(query: str) -> list[str]:
+    """SerpAPI counterpart to _query_brave_raw."""
     if not settings.serp_serpapi_api_key:
         return []
     params = {
         "engine": "google",
-        "q": _build_query(name, domain),
+        "q": query,
         "num": settings.serp_max_results_inspected,
         "api_key": settings.serp_serpapi_api_key,
     }
@@ -125,6 +141,71 @@ def _query_serpapi(name: str, domain: str) -> list[str]:
     body = resp.json()
     results = body.get("organic_results") or []
     return [r.get("link") for r in results if r.get("link")]
+
+
+def _query_brave(name: str, domain: str) -> list[str]:
+    return _query_brave_raw(_build_query(name, domain))
+
+
+def _query_serpapi(name: str, domain: str) -> list[str]:
+    return _query_serpapi_raw(_build_query(name, domain))
+
+
+def _query_freesearch(name: str, org_name: str) -> list[str]:
+    """Dispatch a free-form name+org query through whichever SERP provider
+    is configured. Tries the strict double-quoted query first; if it
+    returns nothing, retries with the looser variant so we don't lose hits
+    on rare unindexed phrasings (Brave returns bad_results=true on those).
+    """
+    if not name or not org_name:
+        return []
+    provider = settings.serp_provider.lower().strip()
+    if provider not in ("brave", "serpapi"):
+        return []
+    dispatch = _query_brave_raw if provider == "brave" else _query_serpapi_raw
+
+    urls = dispatch(_build_freesearch_query(name, org_name))
+    if urls:
+        return urls
+    log.info(
+        "SERP strict free-search empty for %r at %r — retrying loose",
+        name,
+        org_name,
+    )
+    return dispatch(_build_freesearch_query_loose(name, org_name))
+
+
+def find_person_via_freesearch(name: str, org_name: str) -> str | None:
+    """Free-form web search fallback for enrichment when the contact's
+    organization has no known domain. Queries `"name" "org_name"` (both
+    phrase-quoted for disambiguation) and returns the top result's URL.
+
+    Returns None when no SERP provider is configured, when either input
+    is empty, or when the SERP returned nothing.
+
+    Caller responsibility: the returned URL may be on ANY domain
+    (LinkedIn, news article, district website, etc.). Some of those are
+    fine crawl targets, some are not (LinkedIn blocks bots). We don't
+    filter here — the crawler tolerates getting nothing useful back.
+    """
+    if not name or not org_name:
+        return None
+    urls = _query_freesearch(name, org_name)
+    if not urls:
+        log.info(
+            "SERP free-search returned no results for %r at %r",
+            name,
+            org_name,
+        )
+        return None
+    pick = urls[0]
+    log.info(
+        "SERP free-search hit for %r at %r → %s",
+        name,
+        org_name,
+        pick,
+    )
+    return pick
 
 
 def find_person_page(name: str, domain: str) -> str | None:

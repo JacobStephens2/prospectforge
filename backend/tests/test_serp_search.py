@@ -9,9 +9,11 @@ import pytest
 
 from app.services import serp_search
 from app.services.serp_search import (
+    _build_freesearch_query,
     _build_query,
     _filter_same_domain,
     find_person_page,
+    find_person_via_freesearch,
 )
 
 
@@ -137,6 +139,62 @@ def test_brave_http_4xx_returns_none():
         instance = MockClient.return_value.__enter__.return_value
         instance.get.return_value = httpx.Response(429, text="rate limited")
         assert find_person_page("Jane Smith", "school.edu") is None
+
+
+def test_build_freesearch_query_quotes_both():
+    """Free-form query phrase-quotes both name and org for disambiguation."""
+    q = _build_freesearch_query("Patricia Muumba", "Sunrise School District")
+    assert q == '"Patricia Muumba" "Sunrise School District"'
+
+
+def test_find_person_via_freesearch_returns_top_hit():
+    mock_response = httpx.Response(
+        200,
+        json={
+            "web": {
+                "results": [
+                    {"url": "https://sunrisesd.org/staff/muumba"},
+                    {"url": "https://linkedin.com/in/patricia-muumba"},
+                ]
+            }
+        },
+    )
+    with patch.object(serp_search.settings, "serp_provider", "brave"), \
+         patch.object(serp_search.settings, "serp_brave_api_key", "fake-key"), \
+         patch("httpx.Client") as MockClient:
+        instance = MockClient.return_value.__enter__.return_value
+        instance.get.return_value = mock_response
+        out = find_person_via_freesearch("Patricia Muumba", "Sunrise School District")
+    # First result wins — caller decides whether to crawl off-domain pages.
+    assert out == "https://sunrisesd.org/staff/muumba"
+
+
+def test_find_person_via_freesearch_returns_none_when_no_provider():
+    with patch.object(serp_search.settings, "serp_provider", ""):
+        assert (
+            find_person_via_freesearch("Patricia Muumba", "Sunrise School District")
+            is None
+        )
+
+
+def test_find_person_via_freesearch_requires_org_name():
+    with patch.object(serp_search.settings, "serp_provider", "brave"), \
+         patch.object(serp_search.settings, "serp_brave_api_key", "fake-key"):
+        assert find_person_via_freesearch("Patricia Muumba", "") is None
+        assert find_person_via_freesearch("", "Sunrise SD") is None
+
+
+def test_find_person_via_freesearch_returns_none_when_no_results():
+    mock_response = httpx.Response(200, json={"web": {"results": []}})
+    with patch.object(serp_search.settings, "serp_provider", "brave"), \
+         patch.object(serp_search.settings, "serp_brave_api_key", "fake-key"), \
+         patch("httpx.Client") as MockClient:
+        instance = MockClient.return_value.__enter__.return_value
+        instance.get.return_value = mock_response
+        assert (
+            find_person_via_freesearch("Patricia Muumba", "Sunrise School District")
+            is None
+        )
 
 
 def test_serpapi_path():

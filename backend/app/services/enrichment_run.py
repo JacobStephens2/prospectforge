@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Contact, Organization, ProspectRun, Source
-from app.services.serp_search import find_person_page
+from app.services.serp_search import find_person_page, find_person_via_freesearch
 
 log = logging.getLogger(__name__)
 
@@ -82,17 +82,13 @@ def start_enrichment_run(
         org = db.get(Organization, contact.organization_id)
 
     seed_url = _resolve_seed_url(org)
-    if seed_url is None:
-        raise EnrichmentNotPossible(
-            "contact's organization has no website or domain — "
-            "set one before requesting enrichment"
-        )
 
     # SERP Tier-0: try to locate a single high-relevance page on the org
     # domain for this person before falling back to a broad crawl. When
     # no SERP provider is configured (default), find_person_page returns
     # None and we use the org-root seed unchanged.
     serp_seed = None
+    seed_source = "org_website"  # for log/audit clarity
     domain_for_serp = org.domain if (org and org.domain) else None
     if domain_for_serp is None and seed_url:
         # Pull domain off the resolved URL as a fallback.
@@ -101,15 +97,48 @@ def start_enrichment_run(
     if domain_for_serp:
         try:
             serp_seed = find_person_page(contact.name, domain_for_serp)
+            if serp_seed:
+                seed_source = "serp_site"
         except Exception as exc:  # noqa: BLE001 — never fail the run on SERP error
             log.warning("SERP Tier-0 errored for %s: %s", contact.name, exc)
 
+    # Free-form SERP fallback when there's NO seed URL at all (no org
+    # website, no domain). Uses contact name + org name to find a
+    # candidate page anywhere on the web. Per user request 2026-05-27:
+    # don't 400 just because the org lacks a registered URL — go look.
+    if seed_url is None and serp_seed is None and org is not None and org.name:
+        try:
+            serp_seed = find_person_via_freesearch(contact.name, org.name)
+            if serp_seed:
+                seed_source = "serp_freesearch"
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "SERP free-search errored for %s @ %s: %s",
+                contact.name,
+                org.name,
+                exc,
+            )
+
     effective_seed = serp_seed or seed_url
+    if effective_seed is None:
+        raise EnrichmentNotPossible(
+            "no seed URL available — contact's organization has no website, "
+            "no domain, and SERP free-search found nothing for the contact's "
+            "name and organization. Set a website on the org to retry."
+        )
 
     # One-off Source: inactive so it doesn't show in Morgan's source list
-    # but the lineage (which run came from where) is preserved.
+    # but the lineage (which run came from where) is preserved. The source
+    # name encodes how the seed was found so reviewers can tell at a glance
+    # whether the run was scoped to the org's own site or came from a
+    # free-form web search.
+    source_label = {
+        "org_website": f"Enrichment: {contact.name}",
+        "serp_site": f"Enrichment (SERP on org): {contact.name}",
+        "serp_freesearch": f"Enrichment (web search): {contact.name}",
+    }.get(seed_source, f"Enrichment: {contact.name}")
     source = Source(
-        name=f"Enrichment: {contact.name}",
+        name=source_label,
         url=effective_seed,
         crawl_tier=1,
         follow_external_links=False,
@@ -132,11 +161,11 @@ def start_enrichment_run(
     db.commit()
     db.refresh(run)
     log.info(
-        "enrichment run %s created for contact %s (seed=%s, serp_used=%s, budget=%d¢)",
+        "enrichment run %s created for contact %s (seed=%s, seed_source=%s, budget=%d¢)",
         run.id,
         contact.id,
         effective_seed,
-        serp_seed is not None,
+        seed_source,
         budget_cents,
     )
     return run
