@@ -343,7 +343,7 @@ function ReviewInner() {
             title="Filter rows by whether the contact has an email or a phone number"
           >
             <option value="reachable">Has email or phone</option>
-            <option value="any">(any contact info)</option>
+            <option value="any">All</option>
             <option value="none">No contact info</option>
           </Select>
           <Select value={dedupeStatus} onChange={(e) => setDedupeStatus(e.target.value)}>
