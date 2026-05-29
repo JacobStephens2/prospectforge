@@ -97,6 +97,24 @@ function formatContactForAI(c: Contact): string {
   return lines.join("\n");
 }
 
+/**
+ * Loose name match for "is this suggestion about the same person as the
+ * parent contact?" — case-insensitive, whitespace-collapsed, strips
+ * common honorifics. We don't try harder than that; false positives
+ * (a same-name different person) just show "Found email" which Morgan
+ * verifies before applying.
+ */
+function normalizeName(name: string | null | undefined): string {
+  if (!name) return "";
+  return name
+    .toLowerCase()
+    .replace(/\b(dr|mr|mrs|ms|mx|prof|professor|rev|sir|dame)\.?\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function seedSourceLabel(s: string): string {
   if (s === "org_website") return "org website";
   if (s === "serp_site") return "SERP on org domain";
@@ -745,6 +763,32 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
   const activeRun = data?.runs.find(
     (r) => r.status === "pending" || r.status === "running",
   );
+  // Did any enrichment run surface NEW contact info for THIS person
+  // (not just other people at the same org)? We match by normalized
+  // name and treat "new info" as an email or phone the contact didn't
+  // already have. If we find a same-name suggestion that's actually a
+  // different person, the worst outcome is a false positive "found" —
+  // Morgan verifies before clicking "Add to queue" anyway.
+  const selfMatchSuggestion = data?.suggested_contacts.find(
+    (s) => normalizeName(s.name) === normalizeName(contact.name),
+  );
+  const newEmail =
+    selfMatchSuggestion?.email && !contact.email
+      ? selfMatchSuggestion.email
+      : null;
+  const newPhone =
+    selfMatchSuggestion?.phone && !contact.phone
+      ? selfMatchSuggestion.phone
+      : null;
+  const foundNewInfoForSelf = Boolean(newEmail || newPhone);
+  // "Run is done and we can give a verdict" iff there's data, no run is
+  // active, and at least one completed run exists. Until then we keep
+  // the in-progress label so we don't tell Morgan "nothing found" while
+  // a run is still crunching.
+  const showVerdict =
+    data !== null &&
+    !activeRun &&
+    data.runs.some((r) => r.status === "completed");
 
   return (
     <div className="mt-4 pt-4 border-t">
@@ -770,6 +814,56 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       {err && <p className="text-sm text-red-700 mt-2">{err}</p>}
       {loading && !data && (
         <p className="text-xs text-neutral-500 mt-2">Loading enrichment history…</p>
+      )}
+      {showVerdict && (
+        <div
+          className={
+            "mt-3 rounded border px-3 py-2 text-sm " +
+            (foundNewInfoForSelf
+              ? "border-brand-green/40 bg-brand-green-light/15 text-brand-green"
+              : "border-amber-300 bg-amber-50 text-amber-900")
+          }
+        >
+          {foundNewInfoForSelf ? (
+            <>
+              <strong>Found new contact info for {contact.name}:</strong>
+              <ul className="mt-1 ml-4 list-disc">
+                {newEmail && (
+                  <li>
+                    <span className="text-neutral-600">email:</span>{" "}
+                    <code className="font-mono">{newEmail}</code>
+                  </li>
+                )}
+                {newPhone && (
+                  <li>
+                    <span className="text-neutral-600">phone:</span>{" "}
+                    <code className="font-mono">{newPhone}</code>
+                  </li>
+                )}
+              </ul>
+              <p className="mt-1 text-xs text-neutral-700">
+                Apply by editing {contact.name} above (suggestions are not
+                auto-merged), or click &ldquo;Add to queue&rdquo; on the
+                matching row below to bring it in as a standalone contact.
+              </p>
+            </>
+          ) : (
+            <>
+              <strong>
+                No new contact info found for {contact.name}.
+              </strong>
+              {data.suggested_contacts.length > 0 && (
+                <p className="mt-1 text-xs">
+                  The crawl did surface{" "}
+                  <strong>{data.suggested_contacts.length}</strong> other{" "}
+                  {data.suggested_contacts.length === 1 ? "contact" : "contacts"}{" "}
+                  at the same organization (see suggestions below) — some may
+                  still be useful even though they&apos;re not {contact.name}.
+                </p>
+              )}
+            </>
+          )}
+        </div>
       )}
       {data && data.runs.length > 0 && (
         <div className="mt-3 space-y-2">
