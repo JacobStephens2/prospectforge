@@ -98,6 +98,61 @@ function formatContactForAI(c: Contact): string {
 }
 
 /**
+ * Compact status pill that sits next to the panel title so the operator
+ * sees at-a-glance whether anything is still running. Three states:
+ *   - "running" (blue, animated dot) — at least one run is pending/running
+ *   - "complete" (green) — all runs concluded, ≥1 succeeded
+ *   - "failed" (red) — all runs failed (no successes, none in flight)
+ */
+function EnrichmentStatusPill({
+  activeRun,
+  completedRuns,
+  failedRuns,
+  totalRuns,
+}: {
+  activeRun: boolean;
+  completedRuns: number;
+  failedRuns: number;
+  totalRuns: number;
+}) {
+  if (totalRuns === 0) return null;
+  if (activeRun) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-900"
+        title={`At least one enrichment run is still in progress (${completedRuns}/${totalRuns} done)`}
+      >
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+        Running
+      </span>
+    );
+  }
+  if (completedRuns > 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-brand-green-light/20 px-2 py-0.5 text-xs font-bold text-brand-green"
+        title={`All enrichment runs concluded (${completedRuns}/${totalRuns} succeeded)`}
+      >
+        Complete
+        {failedRuns > 0 && (
+          <span className="font-normal text-amber-700">
+            {" "}({failedRuns} failed)
+          </span>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-900"
+      title={`All enrichment runs failed (${failedRuns}/${totalRuns})`}
+    >
+      Failed
+    </span>
+  );
+}
+
+/**
  * Loose name match for "is this suggestion about the same person as the
  * parent contact?" — case-insensitive, whitespace-collapsed, strips
  * common honorifics. We don't try harder than that; false positives
@@ -763,6 +818,13 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
   const activeRun = data?.runs.find(
     (r) => r.status === "pending" || r.status === "running",
   );
+  const completedRuns =
+    data?.runs.filter((r) => r.status === "completed").length ?? 0;
+  const failedRuns =
+    data?.runs.filter(
+      (r) => r.status === "failed" || r.status === "over_budget",
+    ).length ?? 0;
+  const totalRuns = data?.runs.length ?? 0;
   // Did any enrichment run surface NEW contact info for THIS person
   // (not just other people at the same org)? We match by normalized
   // name and treat "new info" as an email or phone the contact didn't
@@ -789,11 +851,35 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
     data !== null &&
     !activeRun &&
     data.runs.some((r) => r.status === "completed");
+  // All runs failed (no completed, no in-progress) — surface separately
+  // since the verdict box won't fire and the operator deserves a clear
+  // failure message rather than just badges in the runs list.
+  const allFailed =
+    data !== null &&
+    !activeRun &&
+    totalRuns > 0 &&
+    completedRuns === 0 &&
+    failedRuns > 0;
+  // Aggregate progress for the in-progress banner.
+  const totalPagesSoFar =
+    data?.runs.reduce((sum, r) => sum + r.pages_crawled, 0) ?? 0;
+  const totalContactsSoFar =
+    data?.runs.reduce((sum, r) => sum + r.contacts_extracted, 0) ?? 0;
 
   return (
     <div className="mt-4 pt-4 border-t">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h4 className="text-sm font-semibold">Find more contact info</h4>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h4 className="text-sm font-semibold">Find more contact info</h4>
+          {totalRuns > 0 && (
+            <EnrichmentStatusPill
+              activeRun={Boolean(activeRun)}
+              completedRuns={completedRuns}
+              failedRuns={failedRuns}
+              totalRuns={totalRuns}
+            />
+          )}
+        </div>
         <Button
           variant="secondary"
           onClick={startEnrich}
@@ -814,6 +900,34 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       {err && <p className="text-sm text-red-700 mt-2">{err}</p>}
       {loading && !data && (
         <p className="text-xs text-neutral-500 mt-2">Loading enrichment history…</p>
+      )}
+      {activeRun && (
+        <div className="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 flex items-center gap-3">
+          <span
+            className="inline-block h-2.5 w-2.5 rounded-full bg-blue-500 animate-pulse shrink-0"
+            aria-hidden="true"
+          />
+          <div>
+            <div className="font-medium">Enrichment in progress…</div>
+            <div className="text-xs text-blue-800">
+              {totalPagesSoFar} page{totalPagesSoFar === 1 ? "" : "s"} crawled
+              {totalContactsSoFar > 0 && (
+                <> · {totalContactsSoFar} contact{totalContactsSoFar === 1 ? "" : "s"} extracted</>
+              )}
+              {" · "}refreshing every 3s
+            </div>
+          </div>
+        </div>
+      )}
+      {allFailed && (
+        <div className="mt-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+          <strong>
+            Enrichment failed
+            {failedRuns > 1 ? ` (${failedRuns} runs)` : ""}.
+          </strong>{" "}
+          See per-run details below. You can click &ldquo;Find more contact
+          info&rdquo; again to retry.
+        </div>
       )}
       {showVerdict && (
         <div
