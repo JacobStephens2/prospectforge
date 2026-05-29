@@ -35,7 +35,16 @@ import trafilatura
 
 from app.db import SessionLocal
 from app.models import SourcePage
+from app.services.contact_form_detect import (
+    detect_contact_form_actions,
+    has_contact_form,
+)
 from app.services.deobfuscate import deobfuscate_html
+from app.services.image_ocr import (
+    find_contact_image_candidates,
+    ocr_image_bytes,
+    ocr_is_available,
+)
 from app.services.pdf_extract import extract_pdf_text, is_pdf_content_type
 from app.services.ssrf_guard import SSRFBlocked, validate_target_url
 
@@ -93,6 +102,53 @@ def _extract_markdown(body: bytes, content_type: str | None) -> str | None:
         return trafilatura.extract(decoded)
     except Exception:
         return None
+
+
+def _ocr_contact_images(
+    html: str, base_url: str, client: httpx.Client
+) -> tuple[str, list[dict[str, Any]]]:
+    """OCR contact-flavored images on the page, return (concatenated text,
+    per-image telemetry). Best-effort and silent on every failure mode —
+    OCR is a yield boost, not load-bearing. Image fetches go through the
+    SSRF guard just like the page fetch."""
+    if not ocr_is_available():
+        return "", []
+    candidates = find_contact_image_candidates(html, base_url=base_url)
+    if not candidates:
+        return "", []
+
+    ocr_chunks: list[str] = []
+    telemetry: list[dict[str, Any]] = []
+    for img_url in candidates:
+        entry: dict[str, Any] = {"url": img_url, "status": "skipped"}
+        try:
+            validate_target_url(img_url)
+        except SSRFBlocked:
+            entry["status"] = "blocked_ssrf"
+            telemetry.append(entry)
+            continue
+        try:
+            resp = client.get(img_url, follow_redirects=False)
+        except httpx.HTTPError:
+            entry["status"] = "fetch_error"
+            telemetry.append(entry)
+            continue
+        if resp.status_code != 200 or not resp.content:
+            entry["status"] = f"http_{resp.status_code}"
+            telemetry.append(entry)
+            continue
+        text = ocr_image_bytes(resp.content)
+        if text:
+            entry["status"] = "ocr_text"
+            entry["chars"] = len(text)
+            ocr_chunks.append(text)
+        else:
+            entry["status"] = "ocr_empty"
+        telemetry.append(entry)
+
+    if not ocr_chunks:
+        return "", telemetry
+    return "\n\n".join(ocr_chunks), telemetry
 
 
 def safe_fetch(url: str, *, client: httpx.Client | None = None) -> FetchResult:
@@ -171,20 +227,57 @@ def safe_fetch(url: str, *, client: httpx.Client | None = None) -> FetchResult:
             # Terminal response — non-redirect.
             body = resp.content
             content_type = resp.headers.get("content-type", "").split(";")[0].strip() or None
+            page_metadata: dict[str, Any] = {
+                "redirect_chain": redirect_chain,
+                "content_type": content_type,
+                "content_length": len(body),
+                "resolved_ips": list(target.resolved_ips),
+            }
+            # Contact-form detection runs only on HTML — for sites that route
+            # everything through "Contact Us" instead of publishing emails,
+            # this is the only signal that the page is still reachable.
+            decoded_html = ""
+            if content_type and content_type.lower().startswith(("text/html", "application/xhtml")):
+                try:
+                    decoded_html = body.decode("utf-8", errors="replace")
+                except Exception:
+                    decoded_html = ""
+                if decoded_html and "<form" in decoded_html.lower():
+                    if has_contact_form(decoded_html):
+                        page_metadata["has_contact_form"] = True
+                        actions = detect_contact_form_actions(decoded_html)
+                        if actions:
+                            page_metadata["contact_form_actions"] = actions
+
+            content_markdown = _extract_markdown(body, content_type)
+
+            # OCR-augment HTML pages: pull text out of contact-flavored
+            # <img>s so image-as-text obfuscation feeds into the regex
+            # pre-pass and the LLM. Silent no-op when tesseract isn't
+            # installed (see image_ocr.ocr_is_available).
+            if decoded_html:
+                ocr_text, ocr_telemetry = _ocr_contact_images(
+                    decoded_html, base_url=str(resp.url), client=client
+                )
+                if ocr_telemetry:
+                    page_metadata["ocr_images"] = ocr_telemetry
+                if ocr_text:
+                    page_metadata["ocr_text_chars"] = len(ocr_text)
+                    content_markdown = (
+                        f"{content_markdown}\n\n{ocr_text}"
+                        if content_markdown
+                        else ocr_text
+                    )
+
             return FetchResult(
                 url=url,
                 canonical_url=str(resp.url),
                 http_status=resp.status_code,
                 status="fetched",
                 content_hash=_hash_body(body),
-                content_markdown=_extract_markdown(body, content_type),
+                content_markdown=content_markdown,
                 raw_body=body,
-                page_metadata={
-                    "redirect_chain": redirect_chain,
-                    "content_type": content_type,
-                    "content_length": len(body),
-                    "resolved_ips": list(target.resolved_ips),
-                },
+                page_metadata=page_metadata,
             )
 
         return FetchResult(

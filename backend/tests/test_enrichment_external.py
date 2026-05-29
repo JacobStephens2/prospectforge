@@ -6,11 +6,30 @@ from unittest.mock import patch
 
 import pytest
 
+import httpx
+
 from app.services.enrichment_external import (
     MIN_CONFIDENT,
     EnrichmentResult,
+    _best_rocketreach_email,
+    _lookup_apollo,
+    _lookup_rocketreach,
     lookup_via_api,
 )
+
+
+def _mock_client(handler):
+    """Patch httpx.Client so a provider's outbound call hits a MockTransport
+    instead of the network. Returns a context-manager patch target."""
+    from unittest.mock import patch
+
+    real_client = httpx.Client(transport=httpx.MockTransport(handler), timeout=5.0)
+
+    class _Factory:
+        def __call__(self, *args, **kwargs):
+            return real_client
+
+    return patch("app.services.enrichment_external.httpx.Client", _Factory())
 
 
 def _result(source: str, confidence: float) -> EnrichmentResult:
@@ -93,3 +112,96 @@ def test_none_from_provider_skips_to_next():
 def test_threshold_constant_is_sensible():
     """Smoke test — threshold shouldn't drift to extremes by accident."""
     assert 0.5 <= MIN_CONFIDENT <= 0.95
+
+
+# ---------- Apollo ----------
+
+
+def test_apollo_returns_none_without_key():
+    with patch("app.services.enrichment_external.settings.apollo_api_key", ""):
+        assert _lookup_apollo("Jane Doe", "school.edu", None) is None
+
+
+def test_apollo_parses_revealed_email():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-api-key"] == "k"
+        return httpx.Response(
+            200,
+            json={
+                "person": {
+                    "email": "jane.doe@school.edu",
+                    "email_status": "verified",
+                    "title": "Director of Admissions",
+                    "linkedin_url": "https://linkedin.com/in/jane",
+                }
+            },
+        )
+
+    with patch("app.services.enrichment_external.settings.apollo_api_key", "k"), _mock_client(handler):
+        out = _lookup_apollo("Jane Doe", "school.edu", None)
+    assert out is not None
+    assert out.email == "jane.doe@school.edu"
+    assert out.source == "apollo"
+    assert out.phone is None
+    assert out.confidence == 0.85
+
+
+def test_apollo_locked_email_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"person": {"email": "email_not_unlocked@domain.com"}})
+
+    with patch("app.services.enrichment_external.settings.apollo_api_key", "k"), _mock_client(handler):
+        assert _lookup_apollo("Jane Doe", "school.edu", None) is None
+
+
+def test_apollo_http_error_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="rate limited")
+
+    with patch("app.services.enrichment_external.settings.apollo_api_key", "k"), _mock_client(handler):
+        assert _lookup_apollo("Jane Doe", "school.edu", None) is None
+
+
+# ---------- RocketReach ----------
+
+
+def test_rocketreach_returns_none_without_key():
+    with patch("app.services.enrichment_external.settings.rocketreach_api_key", ""):
+        assert _lookup_rocketreach("Jane Doe", "school.edu", None) is None
+
+
+def test_rocketreach_picks_on_domain_valid_email():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["api-key"] == "k"
+        return httpx.Response(
+            200,
+            json={
+                "current_title": "Teacher",
+                "linkedin_url": "https://linkedin.com/in/jd",
+                "emails": [
+                    {"email": "jdoe@other.com", "smtp_valid": "valid"},
+                    {"email": "jane.doe@school.edu", "smtp_valid": "valid"},
+                ],
+            },
+        )
+
+    with patch("app.services.enrichment_external.settings.rocketreach_api_key", "k"), _mock_client(handler):
+        out = _lookup_rocketreach("Jane Doe", "school.edu", None)
+    assert out is not None
+    assert out.email == "jane.doe@school.edu"
+    assert out.confidence == 0.85
+    assert out.source == "rocketreach"
+
+
+def test_best_rocketreach_email_prefers_on_domain_valid():
+    emails = [
+        {"email": "x@elsewhere.com", "smtp_valid": "valid"},
+        {"email": "jane@school.edu", "smtp_valid": "valid"},
+    ]
+    addr, conf = _best_rocketreach_email(emails, "school.edu")
+    assert addr == "jane@school.edu"
+    assert conf == 0.85
+
+
+def test_best_rocketreach_email_empty_list():
+    assert _best_rocketreach_email([], "school.edu") == (None, 0.0)

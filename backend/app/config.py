@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     # off (the integration returns "no result"/"unknown" rather than
     # calling out). Set the key in .env to activate.
     hunter_api_key: str = ""
+    apollo_api_key: str = ""
+    rocketreach_api_key: str = ""
     neverbounce_api_key: str = ""
     enrichment_request_timeout_secs: float = 15.0
     # Minimum agreeing samples before a domain email pattern is trusted

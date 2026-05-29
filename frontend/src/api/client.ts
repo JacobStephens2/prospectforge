@@ -196,6 +196,8 @@ export interface EnrichmentCrawledPage {
   status: string;
   http_status: number | null;
   error: string | null;
+  has_contact_form: boolean;
+  contact_form_actions: string[];
 }
 
 export interface EnrichmentRun {

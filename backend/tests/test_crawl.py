@@ -130,6 +130,47 @@ def test_safe_fetch_http_error_is_recorded_not_raised() -> None:
     assert result.error and "ConnectError" in result.error
 
 
+def test_safe_fetch_detects_contact_form_on_html_page() -> None:
+    """When a fetched HTML body contains a contact-style form, safe_fetch
+    records has_contact_form + the form's action target on page_metadata.
+    This is the "reachable via form" signal for orgs that don't publish
+    individual emails."""
+    body = (
+        b"<html><body>"
+        b"<form action=\"/contact/submit\" class=\"contact-form\">"
+        b"<input type=\"email\" name=\"email\">"
+        b"<textarea name=\"message\"></textarea>"
+        b"<button>Send</button>"
+        b"</form>"
+        b"</body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+
+    with _public_ip_patch():
+        result = safe_fetch("https://school.example.com/contact", client=_client(handler))
+
+    assert result.status == "fetched"
+    assert result.page_metadata.get("has_contact_form") is True
+    assert "/contact/submit" in result.page_metadata.get("contact_form_actions", [])
+
+
+def test_safe_fetch_no_contact_form_metadata_when_html_has_no_form() -> None:
+    """A plain HTML page without any form leaves has_contact_form unset
+    (we don't want noise keys on every fetched page)."""
+    body = b"<html><body><p>Just text, no forms.</p></body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+
+    with _public_ip_patch():
+        result = safe_fetch("https://example.com/", client=_client(handler))
+
+    assert "has_contact_form" not in result.page_metadata
+    assert "contact_form_actions" not in result.page_metadata
+
+
 def test_safe_fetch_initial_ssrf_block_is_recorded() -> None:
     """First-hop SSRF block (e.g. user paste a private URL directly)."""
     with patch("app.services.ssrf_guard._resolve_all", return_value=("10.0.0.5",)):

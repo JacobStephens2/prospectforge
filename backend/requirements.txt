@@ -25,6 +25,13 @@ trafilatura==2.0.0
 # PDF text extraction (yield workstream): pure-python, MIT, no native deps.
 pypdf==5.1.0
 
+# OCR for image-obfuscated emails (yield workstream). pytesseract is a
+# thin wrapper over the tesseract binary (apt: tesseract-ocr); Pillow
+# decodes the image bytes before OCR. Crawl path degrades to a no-op
+# when these aren't installed, so OCR is optional at runtime.
+pytesseract==0.3.13
+Pillow==11.0.0
+
 # Observability
 sentry-sdk[fastapi]==2.19.2
 structlog==24.4.0

@@ -16,6 +16,7 @@ RUN apt-get update \
        libpq-dev \
        curl \
        gosu \
+       tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

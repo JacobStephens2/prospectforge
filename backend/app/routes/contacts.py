@@ -304,6 +304,8 @@ class EnrichmentCrawledPage(BaseModel):
     status: str          # fetched | blocked_robots | blocked_ssrf | error | ...
     http_status: int | None = None
     error: str | None = None
+    has_contact_form: bool = False
+    contact_form_actions: list[str] = []
 
 
 class EnrichmentSummary(BaseModel):
@@ -590,6 +592,16 @@ def get_enrichments(
                 error=(p.page_metadata or {}).get("error")
                 if isinstance(p.page_metadata, dict)
                 else None,
+                has_contact_form=bool(
+                    (p.page_metadata or {}).get("has_contact_form")
+                    if isinstance(p.page_metadata, dict)
+                    else False
+                ),
+                contact_form_actions=list(
+                    (p.page_metadata or {}).get("contact_form_actions") or []
+                )
+                if isinstance(p.page_metadata, dict)
+                else [],
             )
             for p in pages_by_run.get(r.id, [])
         ]

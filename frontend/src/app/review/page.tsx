@@ -994,6 +994,16 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
           </p>
           {data.runs.map((r) => {
             const crawledSet = new Set(r.crawled_pages.map((p) => p.url));
+            const formReachable = r.crawled_pages.some((p) => p.has_contact_form);
+            const formMailtos = Array.from(
+              new Set(
+                r.crawled_pages.flatMap((p) =>
+                  (p.contact_form_actions || [])
+                    .filter((a) => a.toLowerCase().startsWith("mailto:"))
+                    .map((a) => a.replace(/^mailto:/i, "")),
+                ),
+              ),
+            );
             return (
               <div
                 key={r.id}
@@ -1023,7 +1033,25 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
                       </Badge>
                     </span>
                   )}
+                  {formReachable && (
+                    <span title="At least one crawled page exposes a contact form — reachable even without a published email">
+                      <Badge intent="info">form-reachable</Badge>
+                    </span>
+                  )}
                 </div>
+                {formMailtos.length > 0 && (
+                  <p className="text-[11px] text-neutral-700">
+                    Form action reveals:{" "}
+                    {formMailtos.map((addr, i) => (
+                      <span key={addr}>
+                        {i > 0 && ", "}
+                        <code className="font-mono bg-white px-1 py-0.5 rounded border">
+                          {addr}
+                        </code>
+                      </span>
+                    ))}
+                  </p>
+                )}
 
                 {r.serp_attempts.length > 0 && (
                   <div className="space-y-1">
@@ -1081,36 +1109,57 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
                       Crawled pages ({r.crawled_pages.length})
                     </summary>
                     <ul className="mt-1 ml-4 space-y-0.5">
-                      {r.crawled_pages.map((p) => (
-                        <li key={p.url} className="flex items-baseline gap-2">
-                          <Badge
-                            intent={
-                              p.status === "fetched"
-                                ? "ok"
-                                : p.status === "error" ||
-                                    p.status.startsWith("blocked")
-                                  ? "bad"
-                                  : "warn"
-                            }
-                          >
-                            {p.status}
-                            {p.http_status && ` ${p.http_status}`}
-                          </Badge>
-                          <a
-                            href={p.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="break-all text-brand-blue hover:underline"
-                          >
-                            {p.url}
-                          </a>
-                          {p.error && (
-                            <span className="text-red-700 text-[11px]">
-                              {p.error}
-                            </span>
-                          )}
-                        </li>
-                      ))}
+                      {r.crawled_pages.map((p) => {
+                        const mailtoAction = p.contact_form_actions?.find((a) =>
+                          a.toLowerCase().startsWith("mailto:"),
+                        );
+                        return (
+                          <li key={p.url} className="flex items-baseline gap-2 flex-wrap">
+                            <Badge
+                              intent={
+                                p.status === "fetched"
+                                  ? "ok"
+                                  : p.status === "error" ||
+                                      p.status.startsWith("blocked")
+                                    ? "bad"
+                                    : "warn"
+                              }
+                            >
+                              {p.status}
+                              {p.http_status && ` ${p.http_status}`}
+                            </Badge>
+                            {p.has_contact_form && (
+                              <span title="This page contains a contact-style form (reachable via form even when no email is published)">
+                                <Badge intent="info">contact form</Badge>
+                              </span>
+                            )}
+                            <a
+                              href={p.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="break-all text-brand-blue hover:underline"
+                            >
+                              {p.url}
+                            </a>
+                            {mailtoAction && (
+                              <span
+                                className="text-[11px] text-neutral-700"
+                                title="The contact form's action revealed a mailto address"
+                              >
+                                form →{" "}
+                                <code className="font-mono bg-white px-1 py-0.5 rounded border">
+                                  {mailtoAction.replace(/^mailto:/i, "")}
+                                </code>
+                              </span>
+                            )}
+                            {p.error && (
+                              <span className="text-red-700 text-[11px]">
+                                {p.error}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </details>
                 )}
