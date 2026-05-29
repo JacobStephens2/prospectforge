@@ -125,6 +125,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ contact_ids }),
     }),
+  promoteContact: (id: string) =>
+    request<Contact>(`/api/contacts/${id}/promote`, { method: "POST" }),
+  bulkPromoteContacts: (contact_ids: string[]) =>
+    request<BulkPromoteResult>(`/api/contacts/promote/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ contact_ids }),
+    }),
   // Suppressions
   listSuppressions: () => request<Suppression[]>("/api/suppressions"),
   createSuppression: (b: { type: string; value: string; reason: string }) =>
@@ -217,6 +224,13 @@ export interface BulkEnrichResult {
   requested: number;
   started: number;
   skipped: { contact_id: string; reason: string }[];
+}
+
+export interface BulkPromoteResult {
+  requested: number;
+  promoted: number;
+  already_standalone: number;
+  not_found: string[];
 }
 
 export interface RunStartResult {

@@ -427,6 +427,116 @@ def post_bulk_enrich(
     )
 
 
+class PromoteResult(BaseModel):
+    """Outcome of promoting one contact from suggestion → standalone."""
+
+    contact_id: uuid.UUID
+    promoted: bool
+    reason: str = ""
+
+
+class BulkPromoteBody(BaseModel):
+    contact_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+
+
+class BulkPromoteResult(BaseModel):
+    requested: int
+    promoted: int
+    already_standalone: int
+    not_found: list[uuid.UUID]
+
+
+def _promote_one(db: Session, contact_id: uuid.UUID, user: User) -> PromoteResult:
+    """Internal helper for /promote and /promote/bulk. Idempotent — a
+    contact that's already standalone (parent_contact_id IS NULL) returns
+    promoted=False with reason='already standalone' so the caller can
+    surface accurate counts."""
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if contact is None:
+        return PromoteResult(
+            contact_id=contact_id, promoted=False, reason="not found"
+        )
+    if contact.parent_contact_id is None:
+        return PromoteResult(
+            contact_id=contact_id, promoted=False, reason="already standalone"
+        )
+    prev_parent = contact.parent_contact_id
+    contact.parent_contact_id = None
+    # Reset review_status to pending if it was needs_review — promoting
+    # implies the operator wants to actively review it (default action
+    # on standalone rows). Don't touch approved/rejected — those are
+    # explicit human decisions to preserve.
+    if contact.review_status == "needs_review":
+        contact.review_status = "pending"
+    db.add(
+        ReviewAction(
+            contact_id=contact.id,
+            user_id=user.id,
+            action="promote",
+            payload={"previous_parent_contact_id": str(prev_parent)},
+        )
+    )
+    return PromoteResult(contact_id=contact_id, promoted=True)
+
+
+@router.post(
+    "/{contact_id}/promote",
+    response_model=ContactOut,
+    status_code=status.HTTP_200_OK,
+)
+def post_promote(
+    contact_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ContactOut:
+    """Promote an enrichment-suggested contact into the main review queue.
+
+    Clears parent_contact_id so the row stops appearing under its parent's
+    suggestions and starts behaving like any other reviewable contact.
+    Writes a 'promote' review_actions audit row. Idempotent on already-
+    standalone rows (no-op).
+    """
+    result = _promote_one(db, contact_id, user)
+    if result.reason == "not found":
+        raise HTTPException(status_code=404, detail="contact not found")
+    db.commit()
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    return _hydrate_one(db, contact)
+
+
+@router.post(
+    "/promote/bulk",
+    response_model=BulkPromoteResult,
+    status_code=status.HTTP_200_OK,
+)
+def post_bulk_promote(
+    body: BulkPromoteBody,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkPromoteResult:
+    """Promote many enrichment-suggested contacts at once. Same semantics
+    as the single endpoint, batched. Returns counts of what was actually
+    moved vs already-standalone vs not-found."""
+    promoted = 0
+    already = 0
+    not_found: list[uuid.UUID] = []
+    for cid in body.contact_ids:
+        r = _promote_one(db, cid, user)
+        if r.promoted:
+            promoted += 1
+        elif r.reason == "already standalone":
+            already += 1
+        else:
+            not_found.append(cid)
+    db.commit()
+    return BulkPromoteResult(
+        requested=len(body.contact_ids),
+        promoted=promoted,
+        already_standalone=already,
+        not_found=not_found,
+    )
+
+
 @router.get(
     "/{contact_id}/enrichments", response_model=EnrichmentSummary
 )

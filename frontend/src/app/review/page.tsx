@@ -667,6 +667,37 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // promoting = id of the contact currently being promoted, "all" for the
+  // bulk button, or null for idle. Used to disable buttons during in-flight
+  // requests so a double-click can't fire two promotes.
+  const [promoting, setPromoting] = useState<string | null>(null);
+
+  async function promoteOne(id: string) {
+    setPromoting(id);
+    setErr(null);
+    try {
+      await api.promoteContact(id);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPromoting(null);
+    }
+  }
+
+  async function promoteAll(ids: string[]) {
+    if (ids.length === 0) return;
+    setPromoting("all");
+    setErr(null);
+    try {
+      await api.bulkPromoteContacts(ids);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPromoting(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -882,38 +913,63 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       )}
       {data && data.suggested_contacts.length > 0 && (
         <div className="mt-3 space-y-2">
-          <p className="text-xs font-medium text-neutral-700">
-            Suggestions found:
-          </p>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-xs font-medium text-neutral-700">
+              Suggestions found ({data.suggested_contacts.length}):
+            </p>
+            <Button
+              variant="secondary"
+              onClick={() => promoteAll(data.suggested_contacts.map((c) => c.id))}
+              disabled={promoting !== null}
+              title="Move every suggestion into the main review queue as a standalone contact. They keep their extracted email/phone and will be reachable via the standard filters."
+            >
+              {promoting === "all"
+                ? "Adding…"
+                : `Add all ${data.suggested_contacts.length} to queue`}
+            </Button>
+          </div>
           {data.suggested_contacts.map((c) => (
             <div
               key={c.id}
-              className="text-sm border rounded p-2 bg-neutral-50"
+              className="text-sm border rounded p-2 bg-neutral-50 flex items-start justify-between gap-2"
             >
-              <div className="font-medium">{c.name}</div>
-              {c.title && <div className="text-xs text-neutral-600">{c.title}</div>}
-              <div className="text-xs mt-1">
-                {c.email && (
-                  <span className="mr-3">
-                    <span className="text-neutral-500">email:</span> {c.email}
-                  </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">{c.name}</div>
+                {c.title && (
+                  <div className="text-xs text-neutral-600">{c.title}</div>
                 )}
-                {c.phone && (
-                  <span>
-                    <span className="text-neutral-500">phone:</span> {c.phone}
-                  </span>
-                )}
-                {!c.email && !c.phone && (
-                  <span className="text-neutral-500">
-                    no new contact info on this row
-                  </span>
-                )}
+                <div className="text-xs mt-1 flex flex-wrap gap-x-3">
+                  {c.email && (
+                    <span>
+                      <span className="text-neutral-500">email:</span> {c.email}
+                    </span>
+                  )}
+                  {c.phone && (
+                    <span>
+                      <span className="text-neutral-500">phone:</span> {c.phone}
+                    </span>
+                  )}
+                  {!c.email && !c.phone && (
+                    <span className="text-neutral-500">
+                      no new contact info on this row
+                    </span>
+                  )}
+                </div>
               </div>
+              <Button
+                variant="secondary"
+                onClick={() => promoteOne(c.id)}
+                disabled={promoting !== null}
+                title="Move this suggestion into the main review queue as a standalone contact"
+              >
+                {promoting === c.id ? "Adding…" : "Add to queue"}
+              </Button>
             </div>
           ))}
           <p className="text-xs text-neutral-500">
-            Apply useful info manually by editing this contact (above) — the
-            suggestions are not auto-merged.
+            &ldquo;Add to queue&rdquo; turns a suggestion into a standalone
+            contact in /review. Suggestions you don&apos;t add stay attached to
+            this contact and can be picked up later.
           </p>
         </div>
       )}
