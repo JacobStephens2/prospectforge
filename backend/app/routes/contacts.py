@@ -341,13 +341,13 @@ def post_enrich(
     except EnrichmentNotPossible as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Fire-and-forget the orchestrator, same shape as /api/runs/{id}/start.
+    # Fire-and-forget: crawl + inference/vendor/validation follow-up.
     import threading
 
-    from app.routes.runs import _run_in_background
+    from app.services.enrichment_followup import run_enrichment_in_background
 
     threading.Thread(
-        target=_run_in_background, args=(run.id,), daemon=True
+        target=run_enrichment_in_background, args=(run.id,), daemon=True
     ).start()
 
     return EnrichmentRunOut.model_validate(run)
@@ -397,7 +397,7 @@ def post_bulk_enrich(
     """
     import threading
 
-    from app.routes.runs import _run_in_background
+    from app.services.enrichment_followup import run_enrichment_in_background
 
     skipped: list[BulkEnrichSkip] = []
     run_ids_to_start: list[uuid.UUID] = []
@@ -417,7 +417,7 @@ def post_bulk_enrich(
     # threads referencing run rows that aren't committed yet.
     for rid in run_ids_to_start:
         threading.Thread(
-            target=_run_in_background, args=(rid,), daemon=True
+            target=run_enrichment_in_background, args=(rid,), daemon=True
         ).start()
 
     return BulkEnrichResult(

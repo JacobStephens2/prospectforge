@@ -54,6 +54,22 @@ class Settings(BaseSettings):
     serp_request_timeout_secs: float = 8.0
     serp_max_results_inspected: int = 5
 
+    # Enrichment vendor + validator API keys. All default-empty = feature
+    # off (the integration returns "no result"/"unknown" rather than
+    # calling out). Set the key in .env to activate.
+    hunter_api_key: str = ""
+    neverbounce_api_key: str = ""
+    enrichment_request_timeout_secs: float = 15.0
+    # Minimum agreeing samples before a domain email pattern is trusted
+    # for inference. Council guidance is conservative (5-10); we default
+    # to 3 as a balance and require validation before any inferred email
+    # is marked sendable regardless.
+    enrichment_pattern_min_samples: int = 3
+    # Master switch for emitting pattern-inferred emails at all. Even when
+    # on, inferred emails are only marked sendable if the validator
+    # confirms them (or are flagged pattern_guess / catchall otherwise).
+    enrichment_pattern_inference_enabled: bool = True
+
     # Auth / email
     app_public_url: str = "https://prospect.acme-travel.example"
     smtp_host: str = "smtp.mandrillapp.com"

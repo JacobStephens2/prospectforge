@@ -1,0 +1,230 @@
+"""Post-crawl enrichment follow-up: pattern inference + vendor + validation."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+import pytest
+
+from app.db import SessionLocal
+from app.models import Contact, Organization, ProspectRun, Source, User
+from app.services import enrichment_followup
+from app.services.email_validate import ValidationStatus
+
+
+def _setup(db, *, target_org_domain=None, samples=None, target_name="Anna Kowal-Byrne"):
+    """Create a user/source/enrichment-run/target-contact + sample contacts
+    (other people the crawl 'found' with emails). Returns (run_id, target_id)."""
+    u = User(email=f"fu-{uuid.uuid4()}@acme-travel.example", full_name="FU", role="admin")
+    db.add(u)
+    db.flush()
+    s = Source(name="fu src", url="https://example.com/", created_by=u.id, active=False)
+    db.add(s)
+    db.flush()
+    run = ProspectRun(
+        source_id=s.id,
+        created_by=u.id,
+        max_cost_cents=50,
+        budget_approved_by=u.id,
+        budget_approved_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+    org = Organization(run_id=run.id, name="Hillcrest Academy", domain=target_org_domain)
+    db.add(org)
+    db.flush()
+    target = Contact(
+        run_id=run.id,
+        organization_id=org.id,
+        name=target_name,
+        evidence_excerpt="x" * 30,
+    )
+    db.add(target)
+    db.flush()
+    # Sample contacts found by the crawl (other staff, with emails).
+    for name, email in samples or []:
+        db.add(
+            Contact(
+                run_id=run.id,
+                organization_id=org.id,
+                name=name,
+                email=email,
+                evidence_excerpt="x" * 30,
+            )
+        )
+    run.enrichment_for_contact_id = target.id
+    db.commit()
+    return run.id, target.id
+
+
+def test_pattern_inference_adds_candidate(monkeypatch):
+    # Validator off → UNKNOWN → labeled pattern_guess (still added).
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.UNKNOWN
+    )
+    db = SessionLocal()
+    try:
+        run_id, target_id = _setup(
+            db,
+            target_org_domain="hillcrestacademy.example",
+            samples=[
+                ("John Doe", "jdoe@hillcrestacademy.example"),
+                ("Jane Smith", "jsmith@hillcrestacademy.example"),
+                ("Michelle Halvorsen", "mhalvorsen@hillcrestacademy.example"),
+            ],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "candidate_added"
+        # flast pattern → akowal-byrne@hillcrestacademy.example
+        assert result["candidate"] == "akowal-byrne@hillcrestacademy.example"
+        assert result["confidence"] == "pattern_guess"
+
+        # A suggestion contact now exists under the target.
+        sugg = (
+            db.query(Contact)
+            .filter(Contact.parent_contact_id == target_id)
+            .all()
+        )
+        assert any(c.email == "akowal-byrne@hillcrestacademy.example" for c in sugg)
+    finally:
+        db.close()
+
+
+def test_valid_validation_marks_verified(monkeypatch):
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.VALID
+    )
+    db = SessionLocal()
+    try:
+        run_id, target_id = _setup(
+            db,
+            target_org_domain="hillcrestacademy.example",
+            samples=[
+                ("John Doe", "jdoe@hillcrestacademy.example"),
+                ("Jane Smith", "jsmith@hillcrestacademy.example"),
+                ("Bob Jones", "bjones@hillcrestacademy.example"),
+            ],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "candidate_added"
+        assert result["confidence"] == "verified"
+    finally:
+        db.close()
+
+
+def test_invalid_validation_drops_candidate(monkeypatch):
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.INVALID
+    )
+    db = SessionLocal()
+    try:
+        run_id, target_id = _setup(
+            db,
+            target_org_domain="hillcrestacademy.example",
+            samples=[
+                ("John Doe", "jdoe@hillcrestacademy.example"),
+                ("Jane Smith", "jsmith@hillcrestacademy.example"),
+                ("Bob Jones", "bjones@hillcrestacademy.example"),
+            ],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "candidate_invalid"
+        # No suggestion persisted.
+        sugg = (
+            db.query(Contact)
+            .filter(Contact.parent_contact_id == target_id)
+            .all()
+        )
+        assert sugg == []
+    finally:
+        db.close()
+
+
+def test_catchall_marks_unverifiable(monkeypatch):
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.CATCHALL
+    )
+    db = SessionLocal()
+    try:
+        run_id, _ = _setup(
+            db,
+            target_org_domain="hillcrestacademy.example",
+            samples=[
+                ("John Doe", "jdoe@hillcrestacademy.example"),
+                ("Jane Smith", "jsmith@hillcrestacademy.example"),
+                ("Bob Jones", "bjones@hillcrestacademy.example"),
+            ],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["confidence"] == "unverifiable_catchall"
+    finally:
+        db.close()
+
+
+def test_no_samples_no_candidate():
+    db = SessionLocal()
+    try:
+        run_id, _ = _setup(db, target_org_domain="hillcrestacademy.example", samples=[])
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "no_candidate"
+    finally:
+        db.close()
+
+
+def test_target_with_email_is_skipped(monkeypatch):
+    db = SessionLocal()
+    try:
+        run_id, target_id = _setup(
+            db, target_org_domain="hillcrestacademy.example", samples=[]
+        )
+        # Give the target an email after setup.
+        t = db.get(Contact, target_id)
+        t.email = "already@hillcrestacademy.example"
+        db.commit()
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "target_already_has_email"
+    finally:
+        db.close()
+
+
+def test_below_min_samples_no_inference(monkeypatch):
+    """One sample is below the 3-sample default floor → no pattern."""
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.UNKNOWN
+    )
+    db = SessionLocal()
+    try:
+        run_id, _ = _setup(
+            db,
+            target_org_domain="hillcrestacademy.example",
+            samples=[("John Doe", "jdoe@hillcrestacademy.example")],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        # No vendor key either → no candidate.
+        assert result["status"] == "no_candidate"
+    finally:
+        db.close()
+
+
+def test_domain_inferred_from_samples_when_org_has_none(monkeypatch):
+    """Org has no domain set; we derive it from the majority of sample emails."""
+    monkeypatch.setattr(
+        enrichment_followup, "validate_email", lambda e: ValidationStatus.UNKNOWN
+    )
+    db = SessionLocal()
+    try:
+        run_id, _ = _setup(
+            db,
+            target_org_domain=None,
+            samples=[
+                ("John Doe", "jdoe@hillcrestacademy.example"),
+                ("Jane Smith", "jsmith@hillcrestacademy.example"),
+                ("Bob Jones", "bjones@hillcrestacademy.example"),
+            ],
+        )
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "candidate_added"
+        assert result["candidate"].endswith("@hillcrestacademy.example")
+    finally:
+        db.close()

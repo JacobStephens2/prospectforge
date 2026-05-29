@@ -45,7 +45,14 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
+import httpx
+
+from app.config import settings
+from app.services.email_pattern import split_name
+
 log = logging.getLogger(__name__)
+
+_HUNTER_EMAIL_FINDER = "https://api.hunter.io/v2/email-finder"
 
 
 @dataclass(frozen=True)
@@ -72,16 +79,55 @@ ProviderLookup = Callable[[str, str, str | None], EnrichmentResult | None]
 def _lookup_hunter(
     name: str, domain: str, title_hint: str | None
 ) -> EnrichmentResult | None:
-    """Hunter.io email-finder + email-verifier. Email-only vendor — no phones.
+    """Hunter.io email-finder. Email-only vendor — no phones.
 
-    To activate: replace this body with a hunter-python or httpx call to
-    https://api.hunter.io/v2/email-finder?domain={domain}&first_name=...
-    &last_name=...&api_key={settings.hunter_api_key}. Translate the
-    response's `email` + `score` (0..100) into EnrichmentResult with
-    confidence = score / 100.
+    Returns None when no key is configured (default-off), when the name
+    can't be split into first/last, or on any transport/API error.
+    Hunter's `score` (0..100) becomes our confidence (score/100).
     """
-    log.debug("hunter stub: %s @ %s — not configured", name, domain)
-    return None
+    if not settings.hunter_api_key:
+        log.debug("hunter: no key configured, skipping %s @ %s", name, domain)
+        return None
+    parts = split_name(name)
+    if parts is None:
+        return None
+    params = {
+        "domain": domain,
+        "first_name": parts.first,
+        "last_name": parts.last,
+        "api_key": settings.hunter_api_key,
+    }
+    try:
+        with httpx.Client(
+            timeout=settings.enrichment_request_timeout_secs
+        ) as cli:
+            resp = cli.get(_HUNTER_EMAIL_FINDER, params=params)
+    except httpx.HTTPError as exc:
+        log.warning("hunter transport error for %s @ %s: %s", name, domain, exc)
+        return None
+    if resp.status_code >= 400:
+        log.warning(
+            "hunter http %d for %s @ %s: %s",
+            resp.status_code,
+            name,
+            domain,
+            resp.text[:200],
+        )
+        return None
+    data = (resp.json() or {}).get("data") or {}
+    email = data.get("email")
+    if not email:
+        return None
+    score = data.get("score")
+    confidence = (score / 100.0) if isinstance(score, (int, float)) else 0.5
+    return EnrichmentResult(
+        email=email,
+        phone=None,
+        title=data.get("position") or title_hint,
+        linkedin_url=data.get("linkedin"),
+        source="hunter",
+        confidence=confidence,
+    )
 
 
 def _lookup_apollo(
