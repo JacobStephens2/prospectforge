@@ -42,6 +42,7 @@ or catch-all-risky.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -55,6 +56,13 @@ log = logging.getLogger(__name__)
 _HUNTER_EMAIL_FINDER = "https://api.hunter.io/v2/email-finder"
 _APOLLO_PEOPLE_MATCH = "https://api.apollo.io/api/v1/people/match"
 _ROCKETREACH_LOOKUP = "https://api.rocketreach.co/api/v2/person/lookup"
+_ROCKETREACH_CHECK_STATUS = "https://api.rocketreach.co/api/v2/person/checkStatus"
+
+# RocketReach lookups are async — a fresh lookup returns status="progress"
+# with only the cached emails subset. Poll checkStatus until "complete"
+# (or this many tries) to get the fully-enriched payload.
+_ROCKETREACH_MAX_POLLS = 4
+_ROCKETREACH_POLL_DELAY_SECS = 2.0
 
 
 @dataclass(frozen=True)
@@ -209,9 +217,11 @@ def _lookup_rocketreach(
     cost bounded.
 
     Auth is via the `Api-Key` header. We pass name + current_employer
-    (the org domain) to disambiguate. RocketReach returns a list of
-    `emails` with `smtp_valid` grades; we pick the best deliverable one.
-    Returns None on no-key, unsplittable name, error, or no email.
+    (the org domain) to disambiguate. RocketReach's lookup is async: a
+    fresh request returns `status="progress"` with only cached emails;
+    we poll checkStatus until "complete" then re-fetch so the `emails`
+    array contains the full enriched set. Returns None on no-key,
+    unsplittable name, error, or no email.
     """
     if not settings.rocketreach_api_key:
         log.debug("rocketreach: no key configured, skipping %s @ %s", name, domain)
@@ -225,22 +235,28 @@ def _lookup_rocketreach(
             timeout=settings.enrichment_request_timeout_secs
         ) as cli:
             resp = cli.get(_ROCKETREACH_LOOKUP, params=params, headers=headers)
+            if resp.status_code >= 400:
+                log.warning(
+                    "rocketreach http %d for %s @ %s: %s",
+                    resp.status_code,
+                    name,
+                    domain,
+                    resp.text[:200],
+                )
+                return None
+            data = resp.json() or {}
+            data = _await_rocketreach_complete(cli, data, headers)
     except httpx.HTTPError as exc:
         log.warning("rocketreach transport error for %s @ %s: %s", name, domain, exc)
         return None
-    if resp.status_code >= 400:
-        log.warning(
-            "rocketreach http %d for %s @ %s: %s",
-            resp.status_code,
-            name,
-            domain,
-            resp.text[:200],
-        )
-        return None
-    data = resp.json() or {}
     email, confidence = _best_rocketreach_email(data.get("emails") or [], domain)
     if not email:
-        # Fall back to the top-level current_work_email if present.
+        # RR's curated "best professional email" pick — on-domain when
+        # present, beats the noisier current_work_email fallback.
+        email = data.get("recommended_professional_email")
+        if email:
+            confidence = 0.7 if email.lower().endswith("@" + domain.lower()) else 0.6
+    if not email:
         email = data.get("current_work_email")
         confidence = 0.6
     if not email or "@" not in email:
@@ -253,6 +269,47 @@ def _lookup_rocketreach(
         source="rocketreach",
         confidence=confidence,
     )
+
+
+def _await_rocketreach_complete(
+    cli: httpx.Client, data: dict, headers: dict
+) -> dict:
+    """Poll checkStatus + re-lookup until the profile reports `complete`,
+    or the poll budget is exhausted. Returns whatever payload we have at
+    the end — partial cached emails are still better than nothing."""
+    if data.get("status") != "progress":
+        return data
+    rr_id = data.get("id")
+    if not rr_id:
+        return data
+    for _ in range(_ROCKETREACH_MAX_POLLS):
+        time.sleep(_ROCKETREACH_POLL_DELAY_SECS)
+        try:
+            status_resp = cli.get(
+                _ROCKETREACH_CHECK_STATUS,
+                params={"ids": str(rr_id)},
+                headers=headers,
+            )
+        except httpx.HTTPError:
+            return data
+        if status_resp.status_code >= 400:
+            return data
+        body = status_resp.json()
+        entry = body[0] if isinstance(body, list) and body else body
+        if (entry or {}).get("status") != "complete":
+            continue
+        try:
+            final = cli.get(
+                _ROCKETREACH_LOOKUP,
+                params={"id": str(rr_id)},
+                headers=headers,
+            )
+        except httpx.HTTPError:
+            return data
+        if final.status_code < 400:
+            return final.json() or data
+        return data
+    return data
 
 
 def _best_rocketreach_email(

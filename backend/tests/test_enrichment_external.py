@@ -205,3 +205,62 @@ def test_best_rocketreach_email_prefers_on_domain_valid():
 
 def test_best_rocketreach_email_empty_list():
     assert _best_rocketreach_email([], "school.edu") == (None, 0.0)
+
+
+def test_rocketreach_falls_back_to_recommended_professional_email():
+    """When emails[] yields nothing usable, RR's curated
+    `recommended_professional_email` is preferred over `current_work_email`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "current_title": "Principal",
+                "emails": [],
+                "recommended_professional_email": "jane.doe@school.edu",
+                "current_work_email": "jdoe@school-old.edu",
+            },
+        )
+
+    with patch("app.services.enrichment_external.settings.rocketreach_api_key", "k"), _mock_client(handler):
+        out = _lookup_rocketreach("Jane Doe", "school.edu", None)
+    assert out is not None
+    assert out.email == "jane.doe@school.edu"
+    assert out.confidence == 0.7  # on-domain recommended
+
+
+def test_rocketreach_polls_async_status_until_complete(monkeypatch):
+    """Fresh lookup returns status=progress; code polls checkStatus then
+    re-fetches the lookup to get the enriched emails."""
+    monkeypatch.setattr(
+        "app.services.enrichment_external._ROCKETREACH_POLL_DELAY_SECS", 0.0
+    )
+    calls = {"lookup": 0, "status": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "checkStatus" in str(request.url):
+            calls["status"] += 1
+            return httpx.Response(200, json=[{"id": 42, "status": "complete"}])
+        calls["lookup"] += 1
+        if calls["lookup"] == 1:
+            return httpx.Response(
+                200,
+                json={"id": 42, "status": "progress", "emails": []},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "status": "complete",
+                "emails": [
+                    {"email": "jane@school.edu", "smtp_valid": "valid"},
+                ],
+            },
+        )
+
+    with patch("app.services.enrichment_external.settings.rocketreach_api_key", "k"), _mock_client(handler):
+        out = _lookup_rocketreach("Jane Doe", "school.edu", None)
+    assert out is not None
+    assert out.email == "jane@school.edu"
+    assert calls["lookup"] == 2  # initial + post-complete re-fetch
+    assert calls["status"] >= 1
