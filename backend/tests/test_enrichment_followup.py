@@ -13,6 +13,18 @@ from app.services import enrichment_followup
 from app.services.email_validate import ValidationStatus
 
 
+@pytest.fixture(autouse=True)
+def _no_real_vendor_calls(monkeypatch):
+    """Keep this module hermetic: never let the vendor waterfall make a real
+    network call. With live HUNTER/APOLLO/ROCKETREACH keys in the environment
+    (prod container), lookup_via_api would otherwise issue billed API requests
+    and return non-deterministic results. Force 'no vendor hit' by default;
+    vendor behavior itself is covered in test_enrichment_external.py."""
+    monkeypatch.setattr(
+        enrichment_followup, "lookup_via_api", lambda *a, **k: None
+    )
+
+
 def _setup(db, *, target_org_domain=None, samples=None, target_name="Anna Kowal-Byrne"):
     """Create a user/source/enrichment-run/target-contact + sample contacts
     (other people the crawl 'found' with emails). Returns (run_id, target_id)."""

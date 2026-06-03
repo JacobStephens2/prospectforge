@@ -128,6 +128,12 @@ class ProspectRun(Base):
     pages_crawled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     contacts_extracted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Human-readable reason a run ended in 'failed' or 'over_budget'. Set by
+    # the orchestrator (exception summary / budget message) or by
+    # startup_recovery (orphaned-by-restart note). NULL for runs that
+    # completed cleanly or are still in flight.
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # When set, this run was started as an enrichment for a specific contact
     # (per-contact "find contact info" feature). Contacts produced by the run
     # are linked back via contacts.parent_contact_id.

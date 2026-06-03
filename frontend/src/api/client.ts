@@ -182,6 +182,7 @@ export interface Run {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+  failure_reason: string | null;
 }
 
 export interface EnrichmentSerpAttempt {

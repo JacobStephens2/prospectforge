@@ -287,6 +287,7 @@ class EnrichmentRunOut(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    failure_reason: str | None = None
     # Trace of how the seed was picked + every SERP query attempted.
     seed_source: str | None = None
     seed_url: str | None = None

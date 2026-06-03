@@ -53,6 +53,14 @@ def recover_orphaned_runs(db: Session) -> int:
     # "Activity" for a run is started_at (running case) or created_at
     # (pending case where it never even started). Either being older
     # than cutoff with the row still claiming active status = orphan.
+    orphan_reason = (
+        "Orphaned by a backend restart. The run was still in flight when the "
+        "backend process stopped (deploy, rebuild, or crash), which killed the "
+        "orchestrator thread before it could finish. Recovered at startup and "
+        "marked failed — there is no orchestrator traceback for this case. "
+        "Any pages and contacts it produced before the restart were kept. "
+        "Re-run the source to continue."
+    )
     stmt = (
         update(ProspectRun)
         .where(
@@ -63,7 +71,7 @@ def recover_orphaned_runs(db: Session) -> int:
                 ProspectRun.started_at < cutoff,
             ),
         )
-        .values(status="failed", completed_at=now)
+        .values(status="failed", completed_at=now, failure_reason=orphan_reason)
         # 'fetch' so the session's identity map is refreshed from the DB
         # after the bulk update — the default 'evaluate' can't handle the
         # mixed is_(None)/comparison condition and would leave cached

@@ -98,10 +98,22 @@ class RunSummary:
     error: str | None = None
 
 
-def _set_run_status(db: Session, run: ProspectRun, status: str) -> None:
+def _set_run_status(
+    db: Session,
+    run: ProspectRun,
+    status: str,
+    *,
+    failure_reason: str | None = None,
+) -> None:
     run.status = status
     if status in ("completed", "failed", "over_budget"):
         run.completed_at = datetime.now(timezone.utc)
+    # Record why a run ended badly so the UI can show it. Only set on the
+    # bad-exit statuses; a clean 'completed' clears any stale reason.
+    if status in ("failed", "over_budget"):
+        run.failure_reason = failure_reason
+    elif status == "completed":
+        run.failure_reason = None
     db.commit()
 
 
@@ -630,7 +642,13 @@ def execute_run(
 
     # Final status write — refresh after possible commits in helpers.
     db.refresh(run)
-    _set_run_status(db, run, final_status if final_status != "running" else "completed")
+    resolved_status = final_status if final_status != "running" else "completed"
+    _set_run_status(
+        db,
+        run,
+        resolved_status,
+        failure_reason=error if resolved_status in ("failed", "over_budget") else None,
+    )
 
     return RunSummary(
         pages_fetched=pages_fetched,

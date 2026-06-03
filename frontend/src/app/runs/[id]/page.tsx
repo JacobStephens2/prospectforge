@@ -661,8 +661,16 @@ function StatusBanner({ run }: { run: Run }) {
     detail = (
       <>
         Stopped <strong>{finishedAgo} ago</strong> after{" "}
-        <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}.{" "}
-        Check backend logs for the orchestrator traceback.
+        <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}.
+        {run.failure_reason ? (
+          <>
+            {" "}
+            <span className="block mt-1 font-medium">Reason:</span>
+            <span className="block whitespace-pre-wrap">{run.failure_reason}</span>
+          </>
+        ) : (
+          <> No reason was recorded — check backend logs for the orchestrator traceback.</>
+        )}
       </>
     );
   } else if (s === "over_budget") {

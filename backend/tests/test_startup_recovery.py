@@ -63,6 +63,11 @@ def test_stale_running_run_gets_marked_failed():
         refreshed = db.get(ProspectRun, run_id)
         assert refreshed.status == "failed"
         assert refreshed.completed_at is not None
+        # The reason must explain it was an orphan, not a real crash, so the
+        # UI doesn't send operators hunting for a nonexistent traceback.
+        assert refreshed.failure_reason is not None
+        assert "orphaned" in refreshed.failure_reason.lower()
+        assert "restart" in refreshed.failure_reason.lower()
     finally:
         db.close()
 

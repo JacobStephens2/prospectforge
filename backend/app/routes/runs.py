@@ -52,6 +52,7 @@ class RunOut(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+    failure_reason: str | None = None
 
     model_config = {"from_attributes": True}
 
