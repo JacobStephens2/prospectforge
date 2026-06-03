@@ -93,6 +93,74 @@ def test_create_run_missing_source_404(authed_client) -> None:
     assert r.status_code == 404
 
 
+def _make_run(authed_client) -> str:
+    s = authed_client.post(
+        "/api/sources",
+        json={"name": "Stop", "url": "https://example.com/", "crawl_tier": 1},
+    ).json()
+    return authed_client.post(
+        "/api/runs", json={"source_id": s["id"], "max_cost_cents": 100}
+    ).json()["id"]
+
+
+def test_stop_pending_run_cancels_outright(authed_client) -> None:
+    run_id = _make_run(authed_client)
+    r = authed_client.post(f"/api/runs/{run_id}/stop")
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "cancelled"
+    got = authed_client.get(f"/api/runs/{run_id}").json()
+    assert got["status"] == "cancelled"
+    assert got["failure_reason"]
+    assert got["completed_at"] is not None
+
+
+def test_stop_running_run_flags_cancelling(authed_client) -> None:
+    from app.db import SessionLocal
+    from app.models import ProspectRun
+
+    run_id = _make_run(authed_client)
+    # Simulate the orchestrator having flipped it to 'running'.
+    db = SessionLocal()
+    try:
+        run = db.get(ProspectRun, uuid.UUID(run_id))
+        run.status = "running"
+        db.commit()
+    finally:
+        db.close()
+
+    r = authed_client.post(f"/api/runs/{run_id}/stop")
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "cancelling"
+    assert authed_client.get(f"/api/runs/{run_id}").json()["status"] == "cancelling"
+
+    # Idempotent: a second stop while cancelling is still a 202.
+    r2 = authed_client.post(f"/api/runs/{run_id}/stop")
+    assert r2.status_code == 202
+    assert r2.json()["status"] == "cancelling"
+
+
+def test_stop_completed_run_conflicts(authed_client) -> None:
+    from app.db import SessionLocal
+    from app.models import ProspectRun
+
+    run_id = _make_run(authed_client)
+    db = SessionLocal()
+    try:
+        run = db.get(ProspectRun, uuid.UUID(run_id))
+        run.status = "completed"
+        db.commit()
+    finally:
+        db.close()
+
+    r = authed_client.post(f"/api/runs/{run_id}/stop")
+    assert r.status_code == 409
+
+
+def test_stop_missing_run_404(authed_client) -> None:
+    r = authed_client.post(f"/api/runs/{uuid.uuid4()}/stop")
+    assert r.status_code == 404
+
+
 # ---------- contacts ----------
 
 

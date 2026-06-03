@@ -170,7 +170,7 @@ def delete_run(
     run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    if run.status == "running":
+    if run.status in ("running", "cancelling"):
         raise HTTPException(
             status_code=409,
             detail="run is currently running; wait for it to finish before deleting",
@@ -279,6 +279,58 @@ def start_run(
     thread.start()
 
     return RunStartResult(accepted=True, run_id=run_id, status="running")
+
+
+class RunStopResult(BaseModel):
+    """Acknowledgement for a stop request."""
+
+    accepted: bool
+    run_id: uuid.UUID
+    status: str
+
+
+@router.post(
+    "/{run_id}/stop",
+    response_model=RunStopResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def stop_run(
+    run_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RunStopResult:
+    """Request a cooperative stop of an in-flight run.
+
+    A 'running' run is flagged 'cancelling'; the orchestrator notices on its
+    next crawl iteration, halts, keeps the pages it already fetched, and
+    finalizes as 'cancelled' (no extraction, so no new contacts — re-run to
+    process the crawled pages). A 'pending' run that never started is
+    cancelled outright. Already-finished runs can't be stopped.
+    """
+    run = db.query(ProspectRun).filter(ProspectRun.id == run_id).first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    if run.status == "running":
+        run.status = "cancelling"
+        db.commit()
+        return RunStopResult(accepted=True, run_id=run_id, status="cancelling")
+    if run.status == "pending":
+        # Never started (or about to) — mark cancelled directly. If a start
+        # thread races in, its 'pending'-only guard will refuse to run.
+        run.status = "cancelled"
+        run.completed_at = datetime.now(timezone.utc)
+        run.failure_reason = "Stopped by operator before the run started."
+        db.commit()
+        return RunStopResult(accepted=True, run_id=run_id, status="cancelled")
+    if run.status == "cancelling":
+        # Idempotent — a second click while the orchestrator is winding down.
+        return RunStopResult(accepted=True, run_id=run_id, status="cancelling")
+
+    raise HTTPException(
+        status_code=409,
+        detail=f"run is in status {run.status!r}; only running or pending runs can be stopped",
+    )
 
 
 class RunPageOut(BaseModel):

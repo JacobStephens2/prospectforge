@@ -41,7 +41,8 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
     loadAll();
     // Poll faster while a run is actively progressing so the live trail
     // feels live. Slow down once it's terminal to spare the backend.
-    const intervalMs = run && ["pending", "running"].includes(run.status) ? 2000 : 8000;
+    const intervalMs =
+      run && ["pending", "running", "cancelling"].includes(run.status) ? 2000 : 8000;
     const t = setInterval(loadAll, intervalMs);
     return () => clearInterval(t);
   }, [id, run?.status]);
@@ -54,6 +55,22 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
     setBusy("start");
     try {
       await api.startRun(id);
+      await loadAll();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function stop() {
+    // Cooperative stop: the backend flags the run 'cancelling' and the
+    // orchestrator halts on its next crawl iteration. We refresh so the UI
+    // flips immediately; polling then tracks it to 'cancelled'.
+    setError(null);
+    setBusy("stop");
+    try {
+      await api.stopRun(id);
       await loadAll();
     } catch (e) {
       setError((e as Error).message);
@@ -78,7 +95,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
   if (!run) return <p>Loading…</p>;
 
   const isRunning = run.status === "running";
-  const isTerminal = !["pending", "running"].includes(run.status);
+  const isStoppable = ["running", "pending"].includes(run.status);
+  const isCancelling = run.status === "cancelling";
+  const isTerminal = !["pending", "running", "cancelling"].includes(run.status);
   const budgetPct = Math.min(
     100,
     Math.round((run.cost_cents / Math.max(run.max_cost_cents, 1)) * 100),
@@ -118,6 +137,20 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
           >
             {busy === "start" ? "Starting…" : "Start run"}
           </Button>
+          {(isStoppable || isCancelling) && (
+            <Button
+              onClick={stop}
+              disabled={busy !== null || isCancelling}
+              variant="destructive"
+              title="Halt this run. Pages already crawled are kept, but no extraction runs — re-run the source to process them."
+            >
+              {busy === "stop"
+                ? "Stopping…"
+                : isCancelling
+                  ? "Stopping…"
+                  : "Stop run"}
+            </Button>
+          )}
           <Button onClick={doExport} disabled={busy !== null} variant="secondary">
             {busy === "export" ? "Exporting…" : "Generate CSV"}
           </Button>
@@ -621,6 +654,18 @@ function StatusBanner({ run }: { run: Run }) {
       icon: "\u26A0",
       title: "Stopped \u2014 budget cap reached",
     },
+    cancelling: {
+      wrap: "border-amber-300 bg-amber-50 text-amber-900",
+      dot: "bg-amber-500 animate-pulse",
+      icon: "\u23F9",
+      title: "Stopping\u2026",
+    },
+    cancelled: {
+      wrap: "border-neutral-300 bg-neutral-100 text-neutral-800",
+      dot: "bg-neutral-500",
+      icon: "\u23F9",
+      title: "Stopped by operator",
+    },
   };
   const style = styles[s] ?? {
     wrap: "border-neutral-300 bg-neutral-50 text-neutral-900",
@@ -679,6 +724,21 @@ function StatusBanner({ run }: { run: Run }) {
         Spent <strong>{run.cost_cents}\u00A2 of {run.max_cost_cents}\u00A2</strong>{" "}
         before the cap halted extraction. Unprocessed pages stayed un-extracted \u2014
         rerun with a higher cap to pick up where it stopped.
+      </>
+    );
+  } else if (s === "cancelling") {
+    detail = (
+      <>
+        Stop requested \u2014 finishing the current page, then halting after{" "}
+        <strong>{run.pages_crawled}</strong> page{run.pages_crawled === 1 ? "" : "s"}.
+      </>
+    );
+  } else if (s === "cancelled") {
+    detail = (
+      <>
+        {run.failure_reason ?? (
+          <>Stopped by operator after <strong>{run.pages_crawled}</strong> pages.</>
+        )}
       </>
     );
   }

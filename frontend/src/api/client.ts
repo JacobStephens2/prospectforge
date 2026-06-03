@@ -88,6 +88,11 @@ export const api = {
     request<Run>("/api/runs", { method: "POST", body: JSON.stringify(b) }),
   startRun: (id: string) =>
     request<RunStartResult>(`/api/runs/${id}/start`, { method: "POST" }),
+  stopRun: (id: string) =>
+    request<{ accepted: boolean; run_id: string; status: string }>(
+      `/api/runs/${id}/stop`,
+      { method: "POST" },
+    ),
   deleteRun: (id: string) =>
     request<void>(`/api/runs/${id}`, { method: "DELETE" }),
   listRunPages: (id: string, limit = 50) =>

@@ -98,6 +98,21 @@ class RunSummary:
     error: str | None = None
 
 
+class _RunCancelled(Exception):
+    """Raised inside execute_run when an operator has requested a stop.
+    Unwinds out of the crawl loop and skips extraction; caught locally so
+    the run finalizes as 'cancelled' rather than 'failed'."""
+
+
+def _cancellation_requested(db: Session, run_id: uuid.UUID) -> bool:
+    """Fresh read of the run's status so an operator's stop (a separate
+    request/session that set status='cancelling') becomes visible to this
+    long-running loop. Postgres READ COMMITTED means each new query sees
+    the other transaction's committed write."""
+    status = db.query(ProspectRun.status).filter(ProspectRun.id == run_id).scalar()
+    return status == "cancelling"
+
+
 def _set_run_status(
     db: Session,
     run: ProspectRun,
@@ -106,11 +121,12 @@ def _set_run_status(
     failure_reason: str | None = None,
 ) -> None:
     run.status = status
-    if status in ("completed", "failed", "over_budget"):
+    if status in ("completed", "failed", "over_budget", "cancelled"):
         run.completed_at = datetime.now(timezone.utc)
-    # Record why a run ended badly so the UI can show it. Only set on the
-    # bad-exit statuses; a clean 'completed' clears any stale reason.
-    if status in ("failed", "over_budget"):
+    # Record why a run ended in a non-clean state so the UI can show it.
+    # 'cancelled' is operator-initiated (not a fault) but the note is still
+    # useful ("stopped after N pages"). A clean 'completed' clears it.
+    if status in ("failed", "over_budget", "cancelled"):
         run.failure_reason = failure_reason
     elif status == "completed":
         run.failure_reason = None
@@ -496,6 +512,11 @@ def execute_run(
         while i < len(all_to_walk):
             url = all_to_walk[i]
             i += 1
+            # Operator stop: checked every iteration (cheap PK query vs. a
+            # multi-second fetch). Raising here unwinds past extraction so a
+            # stopped run does no further billable work.
+            if _cancellation_requested(db, run_id):
+                raise _RunCancelled()
             if url in seen_urls:
                 continue
             if len(seen_urls) >= max_pages:
@@ -629,6 +650,18 @@ def execute_run(
         # ----- Step 8: score -----
         _apply_scoring(db, run_id=run.id, target_states=target_states)
 
+    except _RunCancelled:
+        final_status = "cancelled"
+        error = (
+            f"Stopped by operator after {pages_fetched} page(s) crawled. "
+            "Crawled pages were kept, but extraction was not run, so this run "
+            "produced no contacts. Re-run the source to process them."
+        )
+        log.info("run %s stopped by operator after %d pages", run.id, pages_fetched)
+        contacts_blocked_dedupe = 0
+        contacts_blocked_evidence = 0
+        backfilled = 0
+
     except Exception as exc:  # noqa: BLE001
         error = f"{exc.__class__.__name__}: {exc}"
         final_status = "failed"
@@ -647,7 +680,9 @@ def execute_run(
         db,
         run,
         resolved_status,
-        failure_reason=error if resolved_status in ("failed", "over_budget") else None,
+        failure_reason=error
+        if resolved_status in ("failed", "over_budget", "cancelled")
+        else None,
     )
 
     return RunSummary(
