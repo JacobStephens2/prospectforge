@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   flexRender,
   getCoreRowModel,
@@ -204,11 +205,19 @@ export default function ReviewPage() {
 
 function ReviewInner() {
   const params = useSearchParams();
-  const initialRun = params.get("run_id") ?? "";
+  const urlRunId = params.get("run_id") ?? "";
   const initialStatus = params.get("review_status") ?? "pending";
 
-  const [runId, setRunId] = useState(initialRun);
+  const [runId, setRunId] = useState(urlRunId);
   const [reviewStatus, setReviewStatus] = useState(initialStatus);
+  // Keep the run scope locked to the URL's run_id. Navigating in from a
+  // run's "Review queue" link (/review?run_id=…) must show ONLY that run's
+  // contacts — and stay correct even on a client-side nav that re-renders
+  // this page without remounting it (where a mount-only initializer would
+  // otherwise go stale and leak in other runs' rows).
+  useEffect(() => {
+    setRunId(urlRunId);
+  }, [urlRunId]);
   const [dedupeStatus, setDedupeStatus] = useState("");
   // Default is "any" (All); the user's last choice is persisted to
   // localStorage and rehydrated on mount.
@@ -587,6 +596,24 @@ function ReviewInner() {
           </Select>
         </div>
       </div>
+      {runId && (
+        <div className="flex items-center justify-between gap-3 flex-wrap rounded border border-brand-blue/30 bg-brand-blue-light/10 px-3 py-2 text-sm">
+          <span className="text-neutral-700">
+            Scoped to a single run —{" "}
+            <code className="font-mono text-xs bg-white px-1 py-0.5 rounded border">
+              {runId.slice(0, 8)}…
+            </code>
+            . Only contacts from this run are shown.
+          </span>
+          <Link
+            href="/review"
+            className="text-brand-blue hover:underline shrink-0"
+            title="Clear the run filter and show contacts across all runs"
+          >
+            Show all runs
+          </Link>
+        </div>
+      )}
       {exportError && (
         <p className="text-sm text-red-700">{exportError}</p>
       )}
