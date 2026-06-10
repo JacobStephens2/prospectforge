@@ -180,6 +180,7 @@ def list_contacts(
     ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    _user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[ContactOut]:
     q = db.query(Contact).order_by(Contact.created_at.desc())
@@ -227,7 +228,11 @@ def list_contacts(
 
 
 @router.get("/{contact_id}", response_model=ContactOut)
-def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> ContactOut:
+def get_contact(
+    contact_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ContactOut:
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if contact is None:
         raise HTTPException(status_code=404, detail="contact not found")
