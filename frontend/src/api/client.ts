@@ -107,6 +107,7 @@ export const api = {
     dedupe_status?: string;
     has_email?: boolean;
     has_contact_info?: boolean;
+    enrichment?: "succeeded" | "attempted_no_result" | "";
     limit?: number;
   }) => {
     const q = new URLSearchParams();

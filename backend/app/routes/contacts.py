@@ -169,6 +169,15 @@ def list_contacts(
         None,
         description="True — require email OR phone (reachable). False — only contacts missing both.",
     ),
+    enrichment: str | None = Query(
+        None,
+        description=(
+            "Enrichment outcome filter. 'succeeded' — an enrichment produced "
+            "at least one suggestion with an email for this contact. "
+            "'attempted_no_result' — enrichment was attempted (a run targeted "
+            "this contact) but no email suggestion was produced."
+        ),
+    ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -188,6 +197,31 @@ def list_contacts(
         q = q.filter((Contact.email.isnot(None)) | (Contact.phone.isnot(None)))
     elif has_contact_info is False:
         q = q.filter(Contact.email.is_(None) & Contact.phone.is_(None))
+    if enrichment in ("succeeded", "attempted_no_result"):
+        # "Success" is defined by outcome, not run status: an over_budget
+        # crawl that still pattern-inferred + validated an email counts as
+        # succeeded (the run label routinely says over_budget while the
+        # suggestion is the real win).
+        from sqlalchemy.orm import aliased
+
+        Suggestion = aliased(Contact)
+        succeeded = (
+            db.query(Suggestion.id)
+            .filter(
+                Suggestion.parent_contact_id == Contact.id,
+                Suggestion.email.isnot(None),
+            )
+            .exists()
+        )
+        if enrichment == "succeeded":
+            q = q.filter(succeeded)
+        else:
+            attempted = (
+                db.query(ProspectRun.id)
+                .filter(ProspectRun.enrichment_for_contact_id == Contact.id)
+                .exists()
+            )
+            q = q.filter(attempted, ~succeeded)
     rows = q.offset(offset).limit(limit).all()
     return _hydrate(db, rows)
 

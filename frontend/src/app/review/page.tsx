@@ -219,6 +219,9 @@ function ReviewInner() {
     setRunId(urlRunId);
   }, [urlRunId]);
   const [dedupeStatus, setDedupeStatus] = useState("");
+  const [enrichmentOutcome, setEnrichmentOutcome] = useState<
+    "" | "succeeded" | "attempted_no_result"
+  >("");
   // Default is "any" (All); the user's last choice is persisted to
   // localStorage and rehydrated on mount.
   const [contactInfo, setContactInfo] = useState<"any" | "reachable" | "none">("any");
@@ -287,6 +290,7 @@ function ReviewInner() {
       dedupe_status: dedupeStatus || undefined,
       has_contact_info:
         contactInfo === "reachable" ? true : contactInfo === "none" ? false : undefined,
+      enrichment: enrichmentOutcome || undefined,
       limit: 200,
     });
     setContacts(rows);
@@ -297,7 +301,7 @@ function ReviewInner() {
     // with the saved one immediately after.
     if (!contactInfoHydrated) return;
     load();
-  }, [runId, reviewStatus, dedupeStatus, contactInfo, contactInfoHydrated]);
+  }, [runId, reviewStatus, dedupeStatus, contactInfo, enrichmentOutcome, contactInfoHydrated]);
 
   async function bulkEnrich() {
     if (contacts.length === 0) return;
@@ -593,6 +597,19 @@ function ReviewInner() {
             <option value="exact">exact</option>
             <option value="existing_customer">existing_customer</option>
             <option value="suppressed">suppressed</option>
+          </Select>
+          <Select
+            value={enrichmentOutcome}
+            onChange={(e) =>
+              setEnrichmentOutcome(
+                e.target.value as "" | "succeeded" | "attempted_no_result",
+              )
+            }
+            title="Filter by enrichment outcome. 'Info found' means an enrichment produced an email suggestion for the contact (even if the crawl hit its budget cap); 'nothing found' means enrichment was attempted but produced no email."
+          >
+            <option value="">(any enrichment)</option>
+            <option value="succeeded">Enriched: info found</option>
+            <option value="attempted_no_result">Enriched: nothing found</option>
           </Select>
         </div>
       </div>

@@ -197,6 +197,69 @@ def _seed_contact(user_id: uuid.UUID, source_id: uuid.UUID) -> tuple[uuid.UUID, 
         db.close()
 
 
+def test_list_contacts_enrichment_outcome_filter(authed_client, seeded_user) -> None:
+    """'succeeded' = has a child suggestion with an email; 'attempted_no_result'
+    = an enrichment run targeted the contact but no email suggestion exists."""
+    from datetime import datetime, timezone
+
+    from app.db import SessionLocal
+    from app.models import Contact, ProspectRun
+
+    s = authed_client.post(
+        "/api/sources",
+        json={"name": "EnrFilter", "url": "https://example.com/", "crawl_tier": 1},
+    ).json()
+    run_id, succeeded_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    _, attempted_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+    _, untouched_id = _seed_contact(seeded_user.id, uuid.UUID(s["id"]))
+
+    db = SessionLocal()
+    try:
+        # succeeded: an enrichment run + a suggestion WITH an email.
+        for target_id, with_suggestion in ((succeeded_id, True), (attempted_id, False)):
+            enr = ProspectRun(
+                source_id=uuid.UUID(s["id"]),
+                created_by=seeded_user.id,
+                max_cost_cents=50,
+                budget_approved_by=seeded_user.id,
+                budget_approved_at=datetime.now(timezone.utc),
+                enrichment_for_contact_id=target_id,
+                status="over_budget",
+            )
+            db.add(enr)
+            db.flush()
+            if with_suggestion:
+                db.add(
+                    Contact(
+                        run_id=enr.id,
+                        parent_contact_id=target_id,
+                        name="Inferred Person",
+                        email="inferred@example.org",
+                        evidence_excerpt="x" * 30,
+                        review_status="needs_review",
+                    )
+                )
+        db.commit()
+    finally:
+        db.close()
+
+    succeeded_rows = authed_client.get(
+        "/api/contacts?enrichment=succeeded&limit=500"
+    ).json()
+    succeeded_ids = {r["id"] for r in succeeded_rows}
+    assert str(succeeded_id) in succeeded_ids
+    assert str(attempted_id) not in succeeded_ids
+    assert str(untouched_id) not in succeeded_ids
+
+    attempted_rows = authed_client.get(
+        "/api/contacts?enrichment=attempted_no_result&limit=500"
+    ).json()
+    attempted_ids = {r["id"] for r in attempted_rows}
+    assert str(attempted_id) in attempted_ids
+    assert str(succeeded_id) not in attempted_ids
+    assert str(untouched_id) not in attempted_ids
+
+
 def test_review_contact_approve(authed_client, seeded_user) -> None:
     s = authed_client.post(
         "/api/sources", json={"name": "S", "url": "https://example.com/", "crawl_tier": 1}
