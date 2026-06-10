@@ -100,21 +100,27 @@ function formatContactForAI(c: Contact): string {
 
 /**
  * Compact status pill that sits next to the panel title so the operator
- * sees at-a-glance whether anything is still running. Three states:
+ * sees at-a-glance whether anything is still running. States:
  *   - "running" (blue, animated dot) — at least one run is pending/running
- *   - "complete" (green) — all runs concluded, ≥1 succeeded
- *   - "failed" (red) — all runs failed (no successes, none in flight)
+ *   - "info found" (green) — an enrichment produced new contact info for
+ *     this person, REGARDLESS of run status. An over_budget crawl that
+ *     still pattern-inferred + validated an email is a success; the run
+ *     label must not hide it.
+ *   - "complete" (green) — all runs concluded, ≥1 finished cleanly
+ *   - "failed" (red) — all runs failed AND nothing was found
  */
 function EnrichmentStatusPill({
   activeRun,
   completedRuns,
   failedRuns,
   totalRuns,
+  foundInfo,
 }: {
   activeRun: boolean;
   completedRuns: number;
   failedRuns: number;
   totalRuns: number;
+  foundInfo: boolean;
 }) {
   if (totalRuns === 0) return null;
   if (activeRun) {
@@ -125,6 +131,16 @@ function EnrichmentStatusPill({
       >
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
         Running
+      </span>
+    );
+  }
+  if (foundInfo) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-brand-green-light/20 px-2 py-0.5 text-xs font-bold text-brand-green"
+        title="Enrichment produced new contact info for this person (even if a crawl hit its budget cap along the way)"
+      >
+        Info found
       </span>
     );
   }
@@ -888,22 +904,25 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       : null;
   const foundNewInfoForSelf = Boolean(newEmail || newPhone);
   // "Run is done and we can give a verdict" iff there's data, no run is
-  // active, and at least one completed run exists. Until then we keep
-  // the in-progress label so we don't tell Morgan "nothing found" while
-  // a run is still crunching.
+  // active, and EITHER a run completed cleanly OR new info was found for
+  // this person. The outcome trumps the run label: an over_budget crawl
+  // that still produced a validated email is a success, and showing red
+  // "failed" over a real result trained operators to think enrichment
+  // never works.
   const showVerdict =
     data !== null &&
     !activeRun &&
-    data.runs.some((r) => r.status === "completed");
-  // All runs failed (no completed, no in-progress) — surface separately
-  // since the verdict box won't fire and the operator deserves a clear
-  // failure message rather than just badges in the runs list.
+    (data.runs.some((r) => r.status === "completed") || foundNewInfoForSelf);
+  // All runs failed AND nothing was found — only then is the red failure
+  // banner honest. The operator deserves a clear failure message, but not
+  // one that contradicts a successful suggestion sitting right below it.
   const allFailed =
     data !== null &&
     !activeRun &&
     totalRuns > 0 &&
     completedRuns === 0 &&
-    failedRuns > 0;
+    failedRuns > 0 &&
+    !foundNewInfoForSelf;
   // Aggregate progress for the in-progress banner.
   const totalPagesSoFar =
     data?.runs.reduce((sum, r) => sum + r.pages_crawled, 0) ?? 0;
@@ -921,6 +940,7 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
               completedRuns={completedRuns}
               failedRuns={failedRuns}
               totalRuns={totalRuns}
+              foundInfo={foundNewInfoForSelf}
             />
           )}
         </div>
@@ -1004,6 +1024,13 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
                 auto-merged), or click &ldquo;Add to queue&rdquo; on the
                 matching row below to bring it in as a standalone contact.
               </p>
+              {failedRuns > 0 && completedRuns === 0 && (
+                <p className="mt-1 text-xs text-neutral-600">
+                  (The crawl itself hit its budget cap before finishing —
+                  that&apos;s the &ldquo;over_budget&rdquo; label below — but
+                  the email was still inferred and validated.)
+                </p>
+              )}
             </>
           ) : (
             <>
