@@ -110,6 +110,8 @@ def run_enrichment_followup(db: Session, run_id: uuid.UUID) -> dict[str, object]
     target_norm = _norm(target.name)
 
     # Did the crawl already surface the target's own email as a suggestion?
+    # That's the strongest evidence class (literal page text, evidence-
+    # verified), so apply it to the contact directly.
     existing = (
         db.query(Contact)
         .filter(
@@ -118,8 +120,14 @@ def run_enrichment_followup(db: Session, run_id: uuid.UUID) -> dict[str, object]
         )
         .all()
     )
-    if any(_norm(c.name) == target_norm for c in existing):
-        return {"status": "crawl_already_found_self"}
+    self_match = next((c for c in existing if _norm(c.name) == target_norm), None)
+    if self_match is not None:
+        applied = _auto_apply_to_target(db, target, self_match)
+        return {
+            "status": "crawl_already_found_self",
+            "auto_applied": applied,
+            "candidate": self_match.email,
+        }
 
     # Verified (name, email) samples from this run's extracted contacts.
     run_contacts = (
@@ -197,12 +205,21 @@ def run_enrichment_followup(db: Session, run_id: uuid.UUID) -> dict[str, object]
         db.rollback()
         return {"status": "duplicate_candidate", "candidate": candidate_email}
 
+    # 5. Auto-apply to the contact — but only when the validator confirmed
+    # deliverability. Catch-all/unknown candidates stay as suggestions for
+    # a human call: stamping an unverified guess onto a real contact record
+    # is exactly the deliverability risk the validation gate exists to stop.
+    auto_applied = False
+    if validation == ValidationStatus.VALID:
+        auto_applied = _auto_apply_to_target(db, target, suggestion)
+
     log.info(
-        "enrichment followup: added %s candidate %s for %s (confidence=%s)",
+        "enrichment followup: added %s candidate %s for %s (confidence=%s, auto_applied=%s)",
         candidate_source,
         candidate_email,
         target.name,
         confidence,
+        auto_applied,
     )
     return {
         "status": "candidate_added",
@@ -210,4 +227,52 @@ def run_enrichment_followup(db: Session, run_id: uuid.UUID) -> dict[str, object]
         "source": candidate_source,
         "confidence": confidence,
         "validation": validation.value,
+        "auto_applied": auto_applied,
     }
+
+
+def _auto_apply_to_target(db: Session, target: Contact, source: Contact) -> bool:
+    """Copy the suggestion's email/phone onto the parent contact, filling
+    gaps only — never overwrites a value the contact already has. Re-scores
+    the contact so the review queue's Direct-email/Phone flags stay honest.
+    Returns True if anything was applied."""
+    applied = False
+    if source.email and not target.email:
+        target.email = source.email
+        target.email_confidence = source.email_confidence
+        applied = True
+    if source.phone and not target.phone:
+        target.phone = source.phone
+        applied = True
+    if not applied:
+        return False
+
+    from app.services.scoring import apply_score, score_contact
+
+    org = (
+        db.get(Organization, target.organization_id)
+        if target.organization_id
+        else None
+    )
+    apply_score(target, score_contact(target, organization=org))
+    try:
+        db.commit()
+    except IntegrityError:
+        # (run_id, email) uniqueness: the target's ORIGINAL run already has
+        # a contact with this email (shared alias, colleague overlap). Leave
+        # the suggestion for a human call instead of forcing it.
+        db.rollback()
+        log.info(
+            "enrichment followup: auto-apply of %s to %s skipped (email "
+            "already exists in the contact's run)",
+            source.email,
+            target.id,
+        )
+        return False
+    log.info(
+        "enrichment followup: auto-applied %s to contact %s (%s)",
+        source.email or source.phone,
+        target.id,
+        target.name,
+    )
+    return True

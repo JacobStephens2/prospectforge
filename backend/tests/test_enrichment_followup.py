@@ -26,48 +26,59 @@ def _no_real_vendor_calls(monkeypatch):
 
 
 def _setup(db, *, target_org_domain=None, samples=None, target_name="Anna Kowal-Byrne"):
-    """Create a user/source/enrichment-run/target-contact + sample contacts
-    (other people the crawl 'found' with emails). Returns (run_id, target_id)."""
+    """Create a user/source, a SOURCE run holding the target contact, and a
+    separate ENRICHMENT run (mirrors production: enrichment runs always
+    target a contact from an earlier run) + sample contacts the enrichment
+    crawl 'found' with emails. Returns (enrichment_run_id, target_id)."""
     u = User(email=f"fu-{uuid.uuid4()}@acme-travel.example", full_name="FU", role="admin")
     db.add(u)
     db.flush()
     s = Source(name="fu src", url="https://example.com/", created_by=u.id, active=False)
     db.add(s)
     db.flush()
-    run = ProspectRun(
+    source_run = ProspectRun(
         source_id=s.id,
         created_by=u.id,
         max_cost_cents=50,
         budget_approved_by=u.id,
         budget_approved_at=datetime.now(timezone.utc),
     )
-    db.add(run)
+    enrich_run = ProspectRun(
+        source_id=s.id,
+        created_by=u.id,
+        max_cost_cents=50,
+        budget_approved_by=u.id,
+        budget_approved_at=datetime.now(timezone.utc),
+    )
+    db.add_all([source_run, enrich_run])
     db.flush()
-    org = Organization(run_id=run.id, name="Hillcrest Academy", domain=target_org_domain)
+    org = Organization(
+        run_id=source_run.id, name="Hillcrest Academy", domain=target_org_domain
+    )
     db.add(org)
     db.flush()
     target = Contact(
-        run_id=run.id,
+        run_id=source_run.id,
         organization_id=org.id,
         name=target_name,
         evidence_excerpt="x" * 30,
     )
     db.add(target)
     db.flush()
-    # Sample contacts found by the crawl (other staff, with emails).
+    # Sample contacts found by the enrichment crawl (other staff, with emails).
     for name, email in samples or []:
         db.add(
             Contact(
-                run_id=run.id,
+                run_id=enrich_run.id,
                 organization_id=org.id,
                 name=name,
                 email=email,
                 evidence_excerpt="x" * 30,
             )
         )
-    run.enrichment_for_contact_id = target.id
+    enrich_run.enrichment_for_contact_id = target.id
     db.commit()
-    return run.id, target.id
+    return enrich_run.id, target.id
 
 
 def test_pattern_inference_adds_candidate(monkeypatch):
@@ -121,6 +132,13 @@ def test_valid_validation_marks_verified(monkeypatch):
         result = enrichment_followup.run_enrichment_followup(db, run_id)
         assert result["status"] == "candidate_added"
         assert result["confidence"] == "verified"
+        # Validator-confirmed email is auto-applied to the contact itself.
+        assert result["auto_applied"] is True
+        target = db.get(Contact, target_id)
+        db.refresh(target)
+        assert target.email == result["candidate"]
+        assert target.email_confidence == "verified"
+        assert target.score_has_direct_email is True
     finally:
         db.close()
 
@@ -170,6 +188,45 @@ def test_catchall_marks_unverifiable(monkeypatch):
         )
         result = enrichment_followup.run_enrichment_followup(db, run_id)
         assert result["confidence"] == "unverifiable_catchall"
+        # Catch-all is NOT auto-applied — stamping an unconfirmed guess onto
+        # the contact is the risk the validation gate exists to prevent. It
+        # stays a suggestion for a human call.
+        assert result["auto_applied"] is False
+        run = db.get(ProspectRun, run_id)
+        target = db.get(Contact, run.enrichment_for_contact_id)
+        db.refresh(target)
+        assert target.email is None
+    finally:
+        db.close()
+
+
+def test_crawl_found_self_email_is_auto_applied(monkeypatch):
+    """When the crawl itself extracted the target's own email (a same-name
+    suggestion), it's literal page text — apply it to the contact directly."""
+    db = SessionLocal()
+    try:
+        run_id, target_id = _setup(
+            db, target_org_domain="hillcrestacademy.example", samples=[]
+        )
+        # Simulate the crawl having extracted the target person WITH email.
+        db.add(
+            Contact(
+                run_id=run_id,
+                parent_contact_id=target_id,
+                name="Anna Kowal-Byrne",
+                email="akowal-byrne@hillcrestacademy.example",
+                evidence_excerpt="x" * 30,
+                review_status="needs_review",
+            )
+        )
+        db.commit()
+
+        result = enrichment_followup.run_enrichment_followup(db, run_id)
+        assert result["status"] == "crawl_already_found_self"
+        assert result["auto_applied"] is True
+        target = db.get(Contact, target_id)
+        db.refresh(target)
+        assert target.email == "akowal-byrne@hillcrestacademy.example"
     finally:
         db.close()
 

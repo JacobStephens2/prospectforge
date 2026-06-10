@@ -903,6 +903,15 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       ? selfMatchSuggestion.phone
       : null;
   const foundNewInfoForSelf = Boolean(newEmail || newPhone);
+  // Enrichment found info AND it's already on the contact (the follow-up
+  // auto-applies validator-confirmed emails). Distinct from "found but not
+  // applied" so the operator isn't told to hand-edit something that's done.
+  const appliedEmail =
+    selfMatchSuggestion?.email &&
+    contact.email &&
+    selfMatchSuggestion.email.toLowerCase() === contact.email.toLowerCase()
+      ? contact.email
+      : null;
   // "Run is done and we can give a verdict" iff there's data, no run is
   // active, and EITHER a run completed cleanly OR new info was found for
   // this person. The outcome trumps the run label: an over_budget crawl
@@ -912,7 +921,9 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
   const showVerdict =
     data !== null &&
     !activeRun &&
-    (data.runs.some((r) => r.status === "completed") || foundNewInfoForSelf);
+    (data.runs.some((r) => r.status === "completed") ||
+      foundNewInfoForSelf ||
+      Boolean(appliedEmail));
   // All runs failed AND nothing was found — only then is the red failure
   // banner honest. The operator deserves a clear failure message, but not
   // one that contradicts a successful suggestion sitting right below it.
@@ -922,7 +933,8 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
     totalRuns > 0 &&
     completedRuns === 0 &&
     failedRuns > 0 &&
-    !foundNewInfoForSelf;
+    !foundNewInfoForSelf &&
+    !appliedEmail;
   // Aggregate progress for the in-progress banner.
   const totalPagesSoFar =
     data?.runs.reduce((sum, r) => sum + r.pages_crawled, 0) ?? 0;
@@ -940,7 +952,7 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
               completedRuns={completedRuns}
               failedRuns={failedRuns}
               totalRuns={totalRuns}
-              foundInfo={foundNewInfoForSelf}
+              foundInfo={foundNewInfoForSelf || Boolean(appliedEmail)}
             />
           )}
         </div>
@@ -997,12 +1009,23 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
         <div
           className={
             "mt-3 rounded border px-3 py-2 text-sm " +
-            (foundNewInfoForSelf
+            (foundNewInfoForSelf || appliedEmail
               ? "border-brand-green/40 bg-brand-green-light/15 text-brand-green"
               : "border-amber-300 bg-amber-50 text-amber-900")
           }
         >
-          {foundNewInfoForSelf ? (
+          {appliedEmail ? (
+            <>
+              <strong>
+                Enrichment found and applied an email for {contact.name}:
+              </strong>{" "}
+              <code className="font-mono">{appliedEmail}</code>
+              <p className="mt-1 text-xs text-neutral-700">
+                The address was validated as deliverable and set on this
+                contact automatically — no manual edit needed.
+              </p>
+            </>
+          ) : foundNewInfoForSelf ? (
             <>
               <strong>Found new contact info for {contact.name}:</strong>
               <ul className="mt-1 ml-4 list-disc">
