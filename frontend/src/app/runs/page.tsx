@@ -9,6 +9,7 @@ import { Select } from "@/components/NativeSelect";
 import { Badge } from "@/components/Badge";
 
 const statuses = ["", "pending", "running", "completed", "failed", "over_budget"];
+const PAGE_SIZE = 50;
 
 function tierIntent(t: number): "ok" | "warn" | "bad" | "info" | "neutral" {
   // Tier 1 = direct httpx (cheapest, default); tier 2 = Firecrawl
@@ -45,10 +46,11 @@ export default function RunsPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [page, setPage] = useState(0);
 
   async function load() {
     const [fresh, counts] = await Promise.all([
-      api.listRuns(filter || undefined),
+      api.listRuns(filter || undefined, PAGE_SIZE, page * PAGE_SIZE),
       api.runCounts(),
     ]);
     setRuns(fresh);
@@ -65,7 +67,22 @@ export default function RunsPage() {
   }
   useEffect(() => {
     load();
+  }, [filter, page]);
+
+  // A status filter change resets paging back to the first page so we never
+  // land on an offset past the end of the (smaller) filtered population.
+  useEffect(() => {
+    setPage(0);
   }, [filter]);
+
+  // Total rows for the *current* view: the whole table when unfiltered,
+  // otherwise the by-status count for the active filter.
+  const effectiveTotal = filter
+    ? statusCounts[filter] ?? 0
+    : totalCount ?? 0;
+  const pageCount = Math.max(1, Math.ceil(effectiveTotal / PAGE_SIZE));
+  const hasPrev = page > 0;
+  const hasNext = page + 1 < pageCount;
 
   function isSelectable(r: Run): boolean {
     return r.status !== "running";
@@ -328,6 +345,43 @@ export default function RunsPage() {
           </tbody>
         </table>
       </Card>
+
+      {effectiveTotal > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-neutral-600">
+            {effectiveTotal === 0 ? (
+              "0 results"
+            ) : (
+              <>
+                Showing <strong>{page * PAGE_SIZE + 1}</strong>–
+                <strong>{Math.min((page + 1) * PAGE_SIZE, effectiveTotal)}</strong>{" "}
+                of <strong>{effectiveTotal}</strong>
+              </>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!hasPrev}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              ← Prev
+            </Button>
+            <span className="text-neutral-600">
+              Page {page + 1} of {pageCount}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!hasNext}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next →
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -108,6 +108,7 @@ def list_runs(
     source_id: uuid.UUID | None = None,
     status_filter: str | None = None,
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ) -> list[RunOut]:
     q = db.query(ProspectRun).order_by(ProspectRun.created_at.desc())
@@ -115,7 +116,7 @@ def list_runs(
         q = q.filter(ProspectRun.source_id == source_id)
     if status_filter is not None:
         q = q.filter(ProspectRun.status == status_filter)
-    return _runs_to_out(db, q.limit(limit).all())
+    return _runs_to_out(db, q.offset(offset).limit(limit).all())
 
 
 class RunCounts(BaseModel):

@@ -79,8 +79,13 @@ export const api = {
   deleteSource: (id: string) =>
     request<void>(`/api/sources/${id}`, { method: "DELETE" }),
   // Runs
-  listRuns: (status?: string) =>
-    request<Run[]>(`/api/runs${status ? `?status_filter=${status}` : ""}`),
+  listRuns: (status?: string, limit = 50, offset = 0) => {
+    const p = new URLSearchParams();
+    if (status) p.set("status_filter", status);
+    p.set("limit", String(limit));
+    p.set("offset", String(offset));
+    return request<Run[]>(`/api/runs?${p.toString()}`);
+  },
   runCounts: () =>
     request<{ total: number; by_status: Record<string, number> }>(`/api/runs/counts`),
   getRun: (id: string) => request<Run>(`/api/runs/${id}`),
