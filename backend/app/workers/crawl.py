@@ -84,6 +84,9 @@ def _hash_body(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+_MAX_EXTRACT_BYTES = 2_000_000   # cap HTML bytes fed to trafilatura (~2 MB)
+
+
 def _extract_markdown(body: bytes, content_type: str | None) -> str | None:
     """Extract page text. HTML → trafilatura (post cfemail decode);
     application/pdf → pypdf via services.pdf_extract; everything else (images,
@@ -98,7 +101,11 @@ def _extract_markdown(body: bytes, content_type: str | None) -> str | None:
     if content_type and not content_type.lower().startswith(("text/", "application/xhtml")):
         return None
     try:
-        decoded = deobfuscate_html(body.decode("utf-8", errors="replace"))
+        # Bound the HTML handed to trafilatura — a pathological multi-MB page
+        # otherwise makes extraction slow and CPU-heavy. The full body is stored
+        # upstream in source_pages.content_markdown; this only caps the parse input.
+        html = body[:_MAX_EXTRACT_BYTES].decode("utf-8", errors="replace")
+        decoded = deobfuscate_html(html)
         return trafilatura.extract(decoded)
     except Exception:
         return None

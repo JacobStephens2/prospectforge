@@ -12,6 +12,7 @@ SQLAlchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 pymysql==1.1.1            # for CRM Bridge read-only sync
+cryptography==44.0.0      # pymysql needs this for MySQL 8.4 caching_sha2_password auth
 
 # Queue / cache
 redis==5.2.1

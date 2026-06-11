@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     redis_port: int = 6379
 
     # CRM Bridge (read-only sync target on the live CRM MySQL).
+    # Defaults to prod mysql8. To offload dedupe reads onto the nightly replica
+    # (crm-replica.acme-travel.example), set crm_db_host there in .env AFTER:
+    #   (1) confirming the replica schema carries tblAgency/tblAgentUsers,
+    #   (2) GRANT SELECT to prospectforge_readonly@<prospect-IP> on the replica,
+    #   (3) opening the replica's firewalld for the prospect VM IP on 3306.
+    # MySQL 8.4 uses caching_sha2_password — pymysql needs the `cryptography`
+    # package (in requirements) or connections fail with a misleading RuntimeError.
     crm_db_host: str = "crm-db.acme-travel.example"
     crm_db_port: int = 3306
     crm_db_name: str = "crm_db"
@@ -48,9 +55,12 @@ class Settings(BaseSettings):
     # page before falling back to a broad org-domain crawl. Empty = disabled
     # (returns no candidate → crawl runs unchanged). Brave preferred over
     # SerpAPI when both set (cheaper, generous free tier).
-    serp_provider: str = ""           # "brave" | "serpapi" | ""
+    serp_provider: str = ""           # "brave" | "serpapi" | "perplexity" | ""
     serp_brave_api_key: str = ""
     serp_serpapi_api_key: str = ""
+    # Perplexity Search API: richer extracted snippets than Brave; we keep only the
+    # URL (ToS-safe — never persist the response body). Same URL-only posture as Brave.
+    serp_perplexity_api_key: str = ""
     serp_request_timeout_secs: float = 8.0
     serp_max_results_inspected: int = 5
 
@@ -62,6 +72,12 @@ class Settings(BaseSettings):
     rocketreach_api_key: str = ""
     neverbounce_api_key: str = ""
     enrichment_request_timeout_secs: float = 15.0
+    # Perplexity Agent API enrichment vendor (last in the chain — prose-extracted,
+    # lower confidence than the structured vendors). Separately gated because it's
+    # pricier per call (~$0.01-0.30) and slower; reports exact usage.cost per call.
+    enrichment_perplexity_api_key: str = ""
+    enrichment_perplexity_model: str = "openai/gpt-5.5"
+    enrichment_perplexity_timeout_secs: float = 120.0
     # Minimum agreeing samples before a domain email pattern is trusted
     # for inference. Council guidance is conservative (5-10); we default
     # to 3 as a balance and require validation before any inferred email

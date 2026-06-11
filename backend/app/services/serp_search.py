@@ -40,6 +40,7 @@ has comparable storage restrictions.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -68,6 +69,7 @@ log = logging.getLogger(__name__)
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
+_PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/search"
 
 
 def _build_query(name: str, domain: str) -> str:
@@ -160,6 +162,45 @@ def _query_serpapi_raw(query: str) -> list[str]:
     return [r.get("link") for r in results if r.get("link")]
 
 
+def _query_perplexity_raw(query: str) -> list[str]:
+    """Perplexity Search API counterpart. ToS-safe: we extract ONLY the result
+    URLs and discard the response body (snippets, dates) immediately — never
+    persisted. One retry on 429/5xx (the API rate-limits bursts); every failure
+    is logged loudly so a silently search-less run is never invisible."""
+    if not settings.serp_perplexity_api_key:
+        return []
+    headers = {
+        "Authorization": f"Bearer {settings.serp_perplexity_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"query": query, "max_results": settings.serp_max_results_inspected}
+    for attempt in (1, 2):
+        try:
+            with httpx.Client(timeout=settings.serp_request_timeout_secs) as cli:
+                resp = cli.post(_PERPLEXITY_ENDPOINT, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            log.warning("perplexity SERP transport failure (attempt %d): %s", attempt, exc)
+            return []
+        if resp.status_code in (429, 500, 502, 503) and attempt == 1:
+            log.warning("perplexity SERP http %d — retrying once", resp.status_code)
+            time.sleep(1.0)
+            continue
+        if resp.status_code >= 400:
+            log.warning("perplexity SERP http %d: %s", resp.status_code, resp.text[:200])
+            return []
+        results = resp.json().get("results") or []
+        return [r.get("url") for r in results if r.get("url")]
+    return []
+
+
+# Provider → raw-query dispatch. All three return URLs only (ToS-safe).
+_RAW_DISPATCH = {
+    "brave": _query_brave_raw,
+    "serpapi": _query_serpapi_raw,
+    "perplexity": _query_perplexity_raw,
+}
+
+
 def _query_brave(name: str, domain: str) -> list[str]:
     return _query_brave_raw(_build_query(name, domain))
 
@@ -177,9 +218,9 @@ def _query_freesearch(name: str, org_name: str) -> list[str]:
     if not name or not org_name:
         return []
     provider = settings.serp_provider.lower().strip()
-    if provider not in ("brave", "serpapi"):
+    dispatch = _RAW_DISPATCH.get(provider)
+    if dispatch is None:
         return []
-    dispatch = _query_brave_raw if provider == "brave" else _query_serpapi_raw
 
     urls = dispatch(_build_freesearch_query(name, org_name))
     if urls:
@@ -278,15 +319,13 @@ def find_person_page_traced(name: str, domain: str) -> tuple[str | None, SerpTra
     provider = settings.serp_provider.lower().strip()
     if not provider:
         return None, SerpTrace(query=query, note="no provider configured")
-    if provider == "brave":
-        raw_urls = _query_brave_raw(query)
-    elif provider == "serpapi":
-        raw_urls = _query_serpapi_raw(query)
-    else:
+    dispatch = _RAW_DISPATCH.get(provider)
+    if dispatch is None:
         log.warning("unknown SERP provider: %r", provider)
         return None, SerpTrace(
             query=query, provider=provider, note=f"unknown provider {provider!r}"
         )
+    raw_urls = dispatch(query)
 
     trace = SerpTrace(query=query, urls=tuple(raw_urls), provider=provider)
     same_domain = _filter_same_domain(raw_urls, domain)

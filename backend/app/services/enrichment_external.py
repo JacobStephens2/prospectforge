@@ -42,6 +42,7 @@ or catch-all-risky.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -57,6 +58,10 @@ _HUNTER_EMAIL_FINDER = "https://api.hunter.io/v2/email-finder"
 _APOLLO_PEOPLE_MATCH = "https://api.apollo.io/api/v1/people/match"
 _ROCKETREACH_LOOKUP = "https://api.rocketreach.co/api/v2/person/lookup"
 _ROCKETREACH_CHECK_STATUS = "https://api.rocketreach.co/api/v2/person/checkStatus"
+_PERPLEXITY_AGENT_ENDPOINT = "https://api.perplexity.ai/v1/responses"
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_LINKEDIN_RE = re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9_%-]+")
 
 # RocketReach lookups are async — a fresh lookup returns status="progress"
 # with only the cached emails subset. Poll checkStatus until "complete"
@@ -333,12 +338,90 @@ def _best_rocketreach_email(
     return best
 
 
+def _parse_agent_text(data: dict) -> tuple[str, float | None]:
+    """→ (answer_text, total_cost_usd) from a Perplexity /v1/responses payload."""
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if item.get("type") == "message":
+            for c in item.get("content") or []:
+                if c.get("type") == "output_text" and c.get("text"):
+                    parts.append(c["text"])
+    cost = ((data.get("usage") or {}).get("cost") or {}).get("total_cost")
+    return "\n".join(parts), cost
+
+
+def _lookup_perplexity_agent(
+    name: str, domain: str, title_hint: str | None
+) -> EnrichmentResult | None:
+    """Last-resort vendor: Perplexity's Agent API runs a server-side web-research
+    loop and returns a cited answer we mine for a same-domain email (plus title /
+    LinkedIn if present). Prose-extracted, so confidence is deliberately below
+    MIN_CONFIDENT — the structured vendors above always win. Reports exact per-call
+    cost (usage.cost). Returns None unless it found an email (the chain wants data)."""
+    if not settings.enrichment_perplexity_api_key:
+        log.debug("perplexity_agent: no key configured, skipping %s @ %s", name, domain)
+        return None
+    prompt = (
+        f"Find the professional work contact details for {name}"
+        + (f" ({title_hint})" if title_hint else "")
+        + f" at the organization whose website is {domain}. From public sources, give their "
+        f"work email address (prefer one on the {domain} domain), job title, and LinkedIn "
+        "profile URL if available. If you cannot find a verified email, say so explicitly — "
+        "do not guess or construct an email from a pattern."
+    )
+    body = {
+        "model": settings.enrichment_perplexity_model,
+        "input": prompt,
+        "tools": [{"type": "web_search"}],
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.enrichment_perplexity_api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=settings.enrichment_perplexity_timeout_secs) as cli:
+            resp = cli.post(_PERPLEXITY_AGENT_ENDPOINT, headers=headers, json=body)
+    except httpx.HTTPError as exc:
+        log.warning("perplexity_agent transport error for %s @ %s: %s", name, domain, exc)
+        return None
+    if resp.status_code >= 400:
+        log.warning("perplexity_agent http %d for %s @ %s: %s",
+                    resp.status_code, name, domain, resp.text[:200])
+        return None
+
+    text, cost = _parse_agent_text(resp.json())
+    log.info("perplexity_agent cost $%.4f for %s @ %s", cost or 0.0, name, domain)
+    if not text:
+        return None
+    bare = domain.split("/")[0].lstrip("www.").lower()
+    emails = _EMAIL_RE.findall(text)
+    # Prefer a same-domain address; else the first plausible one.
+    email = next((e for e in emails if e.lower().endswith("@" + bare)), emails[0] if emails else None)
+    if not email:
+        return None
+    linkedin = (_LINKEDIN_RE.search(text) or [None])
+    linkedin_url = linkedin.group(0) if hasattr(linkedin, "group") else None
+    # On-domain email = stronger signal than a generic public one, but still prose-derived.
+    confidence = 0.6 if email.lower().endswith("@" + bare) else 0.5
+    return EnrichmentResult(
+        email=email,
+        phone=None,
+        title=title_hint,
+        linkedin_url=linkedin_url,
+        source="perplexity_agent",
+        confidence=confidence,
+    )
+
+
 # Chain order matters — cheapest, most accurate vendor first. Stop on
-# first confident hit (confidence >= MIN_CONFIDENT).
+# first confident hit (confidence >= MIN_CONFIDENT). The Perplexity Agent
+# vendor is last: pricier, slower, and prose-derived (sub-threshold confidence),
+# so it only contributes when the structured vendors found nothing.
 _PROVIDER_CHAIN: tuple[ProviderLookup, ...] = (
     _lookup_hunter,
     _lookup_apollo,
     _lookup_rocketreach,
+    _lookup_perplexity_agent,
 )
 
 # A vendor result with confidence below this threshold is treated as a

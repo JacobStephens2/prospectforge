@@ -214,3 +214,45 @@ def test_serpapi_path():
         instance.get.return_value = mock_response
         out = find_person_page("Jane Smith", "school.edu")
     assert out == "https://school.edu/staff/jane"
+
+
+# ---------- P2: Perplexity Search API provider (URL-only, ToS-safe) ----------
+
+
+def test_perplexity_returns_first_same_domain_hit():
+    mock_response = httpx.Response(
+        200,
+        json={
+            "results": [
+                {"url": "https://aggregator.test/x", "snippet": "irrelevant body we discard"},
+                {"url": "https://school.edu/staff/jane", "snippet": "discarded"},
+            ]
+        },
+    )
+    with patch.object(serp_search.settings, "serp_provider", "perplexity"), \
+         patch.object(serp_search.settings, "serp_perplexity_api_key", "pplx-fake"), \
+         patch("httpx.Client") as MockClient:
+        instance = MockClient.return_value.__enter__.return_value
+        instance.post.return_value = mock_response
+        out = find_person_page("Jane Smith", "school.edu")
+    assert out == "https://school.edu/staff/jane"
+
+
+def test_perplexity_retries_once_on_429_then_succeeds():
+    ok = httpx.Response(200, json={"results": [{"url": "https://school.edu/staff/jane"}]})
+    rate_limited = httpx.Response(429, text="slow down")
+    with patch.object(serp_search.settings, "serp_provider", "perplexity"), \
+         patch.object(serp_search.settings, "serp_perplexity_api_key", "pplx-fake"), \
+         patch("time.sleep"), \
+         patch("httpx.Client") as MockClient:
+        instance = MockClient.return_value.__enter__.return_value
+        instance.post.side_effect = [rate_limited, ok]
+        out = find_person_page("Jane Smith", "school.edu")
+    assert out == "https://school.edu/staff/jane"
+    assert instance.post.call_count == 2  # retried exactly once
+
+
+def test_perplexity_disabled_without_key():
+    with patch.object(serp_search.settings, "serp_provider", "perplexity"), \
+         patch.object(serp_search.settings, "serp_perplexity_api_key", ""):
+        assert find_person_page("Jane Smith", "school.edu") is None

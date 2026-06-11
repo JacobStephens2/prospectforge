@@ -85,7 +85,7 @@ services:
   # exposed publicly — there's no built-in auth in self-host mode.
 
   firecrawl-redis:
-    image: redis:alpine
+    image: redis:7-alpine   # pinned to match the main redis (was floating redis:alpine)
     restart: unless-stopped
     command: ["redis-server", "--bind", "0.0.0.0"]
     logging:
