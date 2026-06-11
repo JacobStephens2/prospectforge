@@ -264,3 +264,56 @@ def test_rocketreach_polls_async_status_until_complete(monkeypatch):
     assert out.email == "jane@school.edu"
     assert calls["lookup"] == 2  # initial + post-complete re-fetch
     assert calls["status"] >= 1
+
+
+# ---------- P3/P5: Perplexity Agent API vendor (prose-mined, cost-logged) ----------
+
+
+def _agent_response(text: str, total_cost: float = 0.0123) -> httpx.Response:
+    return httpx.Response(200, json={
+        "output": [
+            {"type": "search_results", "queries": ["q"], "results": []},
+            {"type": "message", "content": [{"type": "output_text", "text": text}]},
+        ],
+        "usage": {"cost": {"total_cost": total_cost}},
+    })
+
+
+def test_perplexity_agent_returns_none_without_key():
+    from app.services.enrichment_external import _lookup_perplexity_agent
+    with patch("app.services.enrichment_external.settings.enrichment_perplexity_api_key", ""):
+        assert _lookup_perplexity_agent("Jane Smith", "school.edu", None) is None
+
+
+def test_perplexity_agent_mines_same_domain_email_and_logs_cost(caplog):
+    from app.services.enrichment_external import _lookup_perplexity_agent
+
+    answer = ("Jane Smith is the Band Director. Her email is jane.smith@school.edu and "
+              "her profile is https://www.linkedin.com/in/janesmith.")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/responses"
+        return _agent_response(answer, total_cost=0.0456)
+
+    import logging
+    with patch("app.services.enrichment_external.settings.enrichment_perplexity_api_key", "pplx-k"), \
+         _mock_client(handler), caplog.at_level(logging.INFO):
+        res = _lookup_perplexity_agent("Jane Smith", "school.edu", "Band Director")
+
+    assert res is not None
+    assert res.email == "jane.smith@school.edu"
+    assert res.source == "perplexity_agent"
+    assert res.linkedin_url == "https://www.linkedin.com/in/janesmith"
+    assert res.confidence < 0.7          # sub-threshold: structured vendors still win
+    assert "perplexity_agent cost $0.0456" in caplog.text
+
+
+def test_perplexity_agent_returns_none_when_no_email_found():
+    from app.services.enrichment_external import _lookup_perplexity_agent
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _agent_response("I could not find a verified email for this person.")
+
+    with patch("app.services.enrichment_external.settings.enrichment_perplexity_api_key", "pplx-k"), \
+         _mock_client(handler):
+        assert _lookup_perplexity_agent("Jane Smith", "school.edu", None) is None
