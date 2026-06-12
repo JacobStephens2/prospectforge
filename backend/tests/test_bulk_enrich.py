@@ -122,8 +122,13 @@ def test_bulk_enrich_starts_runs_for_enrichable_contacts():
     assert body["requested"] == 2
     assert body["started"] == 2
     assert body["skipped"] == []
-    # Two background threads kicked off, one per contact.
-    assert MockThread.call_count == 2
+    # One bounded-pool dispatcher thread is kicked off for the whole batch
+    # (replacing the old one-thread-per-contact fan-out that could spawn
+    # hundreds of threads at once). It's handed both run ids to drive under
+    # the concurrency cap.
+    assert MockThread.call_count == 1
+    dispatched_run_ids = MockThread.call_args.kwargs["args"][0]
+    assert len(dispatched_run_ids) == 2
 
 
 def test_bulk_enrich_skips_contacts_with_no_seedable_org():

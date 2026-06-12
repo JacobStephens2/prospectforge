@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # on, inferred emails are only marked sendable if the validator
     # confirms them (or are flagged pattern_guess / catchall otherwise).
     enrichment_pattern_inference_enabled: bool = True
+    # Max enrichment runs allowed to execute concurrently from one bulk
+    # request. Each run drives a crawl + LLM extraction; an unbounded
+    # fan-out (one thread per contact) once spawned 175 threads and crashed
+    # the backend, orphaning every run. A small pool keeps batches safe.
+    enrichment_bulk_max_concurrent: int = 4
 
     # Auth / email
     app_public_url: str = "https://prospect.acme-travel.example"

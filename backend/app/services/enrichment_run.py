@@ -69,6 +69,7 @@ def start_enrichment_run(
     requested_by_user_id: uuid.UUID,
     max_pages: int = DEFAULT_ENRICHMENT_MAX_PAGES,
     budget_cents: int = DEFAULT_ENRICHMENT_BUDGET_CENTS,
+    batch_id: uuid.UUID | None = None,
 ) -> ProspectRun:
     """Create + persist the enrichment ProspectRun. Returns the run row
     in 'pending' state; the caller is responsible for triggering the
@@ -184,6 +185,7 @@ def start_enrichment_run(
         budget_approved_at=datetime.now(timezone.utc),
         enrichment_for_contact_id=contact.id,
         enrichment_context=enrichment_context,
+        enrichment_batch_id=batch_id,
     )
     db.add(run)
     db.commit()

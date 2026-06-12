@@ -86,6 +86,16 @@ export const api = {
     p.set("offset", String(offset));
     return request<Run[]>(`/api/runs?${p.toString()}`);
   },
+  listRunGroups: (limit = 50, offset = 0) => {
+    const p = new URLSearchParams();
+    p.set("limit", String(limit));
+    p.set("offset", String(offset));
+    return request<RunGroups>(`/api/runs/grouped?${p.toString()}`);
+  },
+  listRunsByBatch: (batchId: string) =>
+    request<Run[]>(`/api/runs?batch_id=${batchId}&limit=500`),
+  deleteBatch: (batchId: string) =>
+    request<void>(`/api/runs/batch/${batchId}`, { method: "DELETE" }),
   runCounts: () =>
     request<{ total: number; by_status: Record<string, number> }>(`/api/runs/counts`),
   getRun: (id: string) => request<Run>(`/api/runs/${id}`),
@@ -138,6 +148,8 @@ export const api = {
     }),
   promoteContact: (id: string) =>
     request<Contact>(`/api/contacts/${id}/promote`, { method: "POST" }),
+  applySuggestion: (suggestionId: string) =>
+    request<Contact>(`/api/contacts/${suggestionId}/apply`, { method: "POST" }),
   bulkPromoteContacts: (contact_ids: string[]) =>
     request<BulkPromoteResult>(`/api/contacts/promote/bulk`, {
       method: "POST",
@@ -194,6 +206,27 @@ export interface Run {
   completed_at: string | null;
   created_at: string;
   failure_reason: string | null;
+}
+
+export interface BatchSummary {
+  batch_id: string;
+  run_count: number;
+  status_counts: Record<string, number>;
+  contacts_found_total: number;
+  first_created_at: string;
+  last_activity_at: string | null;
+  sample_names: string[];
+}
+
+export interface RunGroup {
+  kind: "run" | "batch";
+  run: Run | null;
+  batch: BatchSummary | null;
+}
+
+export interface RunGroups {
+  groups: RunGroup[];
+  total: number;
 }
 
 export interface EnrichmentSerpAttempt {

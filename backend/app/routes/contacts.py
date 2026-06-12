@@ -439,7 +439,12 @@ def post_bulk_enrich(
     """
     import threading
 
+    from app.config import settings
     from app.services.enrichment_followup import run_enrichment_in_background
+
+    # One batch id ties every run from this request together so the /runs
+    # overview can collapse them into a single expandable row.
+    batch_id = uuid.uuid4()
 
     skipped: list[BulkEnrichSkip] = []
     run_ids_to_start: list[uuid.UUID] = []
@@ -449,17 +454,40 @@ def post_bulk_enrich(
                 db,
                 contact_id=cid,
                 requested_by_user_id=user.id,
+                batch_id=batch_id,
             )
             run_ids_to_start.append(run.id)
         except EnrichmentNotPossible as exc:
             skipped.append(BulkEnrichSkip(contact_id=cid, reason=str(exc)))
 
-    # All runs are persisted in 'pending' before we fan out threads —
-    # otherwise a request-aborting client could leave us with started
-    # threads referencing run rows that aren't committed yet.
-    for rid in run_ids_to_start:
+    # All runs are persisted in 'pending' before we fan out work — otherwise
+    # a request-aborting client could leave us with started threads
+    # referencing run rows that aren't committed yet.
+    #
+    # Concurrency is bounded by a semaphore: a single daemon dispatcher
+    # thread starts at most `enrichment_bulk_max_concurrent` worker threads
+    # at a time. A naive "one thread per contact" fan-out once spawned 175
+    # threads (each a crawl + LLM run) and crashed the backend, orphaning
+    # every run. The dispatcher returns control to the request immediately;
+    # the throttling happens off the request path.
+    max_concurrent = max(1, settings.enrichment_bulk_max_concurrent)
+
+    def _dispatch(run_ids: list[uuid.UUID]) -> None:
+        sem = threading.Semaphore(max_concurrent)
+
+        def _worker(rid: uuid.UUID) -> None:
+            try:
+                run_enrichment_in_background(rid)
+            finally:
+                sem.release()
+
+        for rid in run_ids:
+            sem.acquire()
+            threading.Thread(target=_worker, args=(rid,), daemon=True).start()
+
+    if run_ids_to_start:
         threading.Thread(
-            target=run_enrichment_in_background, args=(rid,), daemon=True
+            target=_dispatch, args=(run_ids_to_start,), daemon=True
         ).start()
 
     return BulkEnrichResult(
@@ -577,6 +605,71 @@ def post_bulk_promote(
         already_standalone=already,
         not_found=not_found,
     )
+
+
+@router.post(
+    "/{suggestion_id}/apply",
+    response_model=ContactOut,
+    status_code=status.HTTP_200_OK,
+)
+def post_apply_suggestion(
+    suggestion_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ContactOut:
+    """Apply an enrichment suggestion's email/phone onto its parent contact.
+
+    The follow-up auto-applies only NeverBounce-CONFIRMED emails; catch-all
+    and unknown candidates are deliberately held back as suggestions (the
+    validation gate). This endpoint lets the operator accept one of those
+    held-back suggestions explicitly, with the same gap-fill + re-score
+    behaviour as the automatic path — it never overwrites a value the
+    contact already has, and the suggestion's confidence label rides along
+    so the contact still shows e.g. 'unverifiable_catchall'.
+    """
+    suggestion = db.query(Contact).filter(Contact.id == suggestion_id).first()
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="suggestion not found")
+    if suggestion.parent_contact_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="not an enrichment suggestion (no parent contact to apply to)",
+        )
+    target = (
+        db.query(Contact)
+        .filter(Contact.id == suggestion.parent_contact_id)
+        .first()
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="parent contact not found")
+
+    from app.services.enrichment_followup import _auto_apply_to_target
+
+    applied = _auto_apply_to_target(db, target, suggestion)
+    if not applied:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "nothing to apply — the contact already has this field, or "
+                "the email already exists on another contact in its run"
+            ),
+        )
+    db.add(
+        ReviewAction(
+            contact_id=target.id,
+            user_id=user.id,
+            action="apply_suggestion",
+            payload={
+                "suggestion_id": str(suggestion_id),
+                "email": suggestion.email,
+                "phone": suggestion.phone,
+                "email_confidence": suggestion.email_confidence,
+            },
+        )
+    )
+    db.commit()
+    target = db.query(Contact).filter(Contact.id == target.id).first()
+    return _hydrate_one(db, target)
 
 
 @router.get(

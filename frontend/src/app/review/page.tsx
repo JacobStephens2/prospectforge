@@ -787,7 +787,15 @@ function ReviewInner() {
               )}
             </dd>
           </dl>
-          <EnrichmentPanel contact={selected} />
+          <EnrichmentPanel
+            contact={selected}
+            onApplied={(updated) => {
+              setSelected(updated);
+              setContacts((prev) =>
+                prev.map((c) => (c.id === updated.id ? updated : c)),
+              );
+            }}
+          />
         </Card>
         </div>
       )}
@@ -795,7 +803,13 @@ function ReviewInner() {
   );
 }
 
-function EnrichmentPanel({ contact }: { contact: Contact }) {
+function EnrichmentPanel({
+  contact,
+  onApplied,
+}: {
+  contact: Contact;
+  onApplied?: (updated: Contact) => void;
+}) {
   const [data, setData] = useState<EnrichmentSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -804,6 +818,21 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
   // bulk button, or null for idle. Used to disable buttons during in-flight
   // requests so a double-click can't fire two promotes.
   const [promoting, setPromoting] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+
+  async function applySuggestion(suggestionId: string) {
+    setApplying(true);
+    setErr(null);
+    try {
+      const updated = await api.applySuggestion(suggestionId);
+      onApplied?.(updated);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  }
 
   async function promoteOne(id: string) {
     setPromoting(id);
@@ -903,6 +932,17 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
       ? selfMatchSuggestion.phone
       : null;
   const foundNewInfoForSelf = Boolean(newEmail || newPhone);
+  // Why didn't the follow-up auto-apply this email? The gate only stamps
+  // NeverBounce-CONFIRMED addresses; everything else is held as a
+  // suggestion. Spell that out so the operator understands the Apply
+  // button is an explicit override, not a bug.
+  const unconfirmedReason = newEmail
+    ? selfMatchSuggestion?.email_confidence === "unverifiable_catchall"
+      ? "NeverBounce couldn't confirm this address — the domain is catch-all (its mail server accepts any address), so deliverability is unverified."
+      : selfMatchSuggestion?.email_confidence === "pattern_guess"
+        ? "NeverBounce couldn't confirm this address — it was inferred from the email pattern of this person's colleagues, so it's a best guess."
+        : "NeverBounce couldn't confirm this address."
+    : null;
   // Enrichment found info AND it's already on the contact (the follow-up
   // auto-applies validator-confirmed emails). Distinct from "found but not
   // applied" so the operator isn't told to hand-edit something that's done.
@@ -1043,10 +1083,25 @@ function EnrichmentPanel({ contact }: { contact: Contact }) {
                 )}
               </ul>
               <p className="mt-1 text-xs text-neutral-700">
-                Apply by editing {contact.name} above (suggestions are not
-                auto-merged), or click &ldquo;Add to queue&rdquo; on the
-                matching row below to bring it in as a standalone contact.
+                {unconfirmedReason
+                  ? unconfirmedReason
+                  : "This wasn't written to the contact automatically."}{" "}
+                Click <strong>Apply</strong> to write it onto {contact.name}{" "}
+                (empty fields only — you can still edit it afterward), or
+                &ldquo;Add to queue&rdquo; below to keep it as a separate
+                contact.
               </p>
+              {selfMatchSuggestion && (newEmail || newPhone) && (
+                <div className="mt-2">
+                  <Button
+                    onClick={() => applySuggestion(selfMatchSuggestion.id)}
+                    disabled={applying}
+                    title={`Write this email/phone onto ${contact.name}. Fills empty fields only; never overwrites existing values.`}
+                  >
+                    {applying ? "Applying…" : "Apply to contact"}
+                  </Button>
+                </div>
+              )}
               {failedRuns > 0 && completedRuns === 0 && (
                 <p className="mt-1 text-xs text-neutral-600">
                   (The crawl itself hit its budget cap before finishing —

@@ -107,6 +107,7 @@ def create_run(
 def list_runs(
     source_id: uuid.UUID | None = None,
     status_filter: str | None = None,
+    batch_id: uuid.UUID | None = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -116,6 +117,8 @@ def list_runs(
         q = q.filter(ProspectRun.source_id == source_id)
     if status_filter is not None:
         q = q.filter(ProspectRun.status == status_filter)
+    if batch_id is not None:
+        q = q.filter(ProspectRun.enrichment_batch_id == batch_id)
     return _runs_to_out(db, q.offset(offset).limit(limit).all())
 
 
@@ -141,6 +144,208 @@ def run_counts(db: Session = Depends(get_db)) -> RunCounts:
         .all()
     )
     return RunCounts(total=total, by_status={s: int(n) for s, n in rows})
+
+
+class BatchSummaryOut(BaseModel):
+    """Aggregate of all enrichment runs from one 'Enrich N visible' click.
+
+    Lets the /runs overview show a single collapsed row per bulk request
+    instead of one row per contact. `status_counts` only includes statuses
+    that actually occur (so the UI can render compact pills), and
+    `sample_names` is up to 3 of the target contacts the batch enriched.
+    """
+
+    batch_id: uuid.UUID
+    run_count: int
+    status_counts: dict[str, int]
+    contacts_found_total: int
+    first_created_at: datetime
+    last_activity_at: datetime | None
+    sample_names: list[str]
+
+
+class RunGroupOut(BaseModel):
+    """One row in the grouped /runs view: either a single run or a batch."""
+
+    kind: str  # "run" | "batch"
+    run: RunOut | None = None
+    batch: BatchSummaryOut | None = None
+
+
+class GroupedRunsOut(BaseModel):
+    groups: list[RunGroupOut]
+    total: int  # number of GROUPS (for pagination), not runs
+
+
+_STATUS_COUNT_COLS = [
+    ("completed", "n_completed"),
+    ("running", "n_running"),
+    ("pending", "n_pending"),
+    ("failed", "n_failed"),
+    ("over_budget", "n_over_budget"),
+    ("cancelling", "n_cancelling"),
+]
+
+
+@router.get("/grouped", response_model=GroupedRunsOut)
+def list_runs_grouped(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> GroupedRunsOut:
+    """Paginated overview where the per-contact runs of a bulk-enrich
+    request collapse into one batch row. A group's sort key is its most
+    recent run's created_at, so a fresh batch floats to the top like any
+    other run. Singletons (normal source runs and one-off enrichments)
+    render as ordinary run rows."""
+    from sqlalchemy import text
+
+    total = (
+        db.execute(
+            text(
+                "SELECT count(*) FROM ("
+                "SELECT coalesce(enrichment_batch_id, id) AS gk "
+                "FROM prospect_runs GROUP BY gk) t"
+            )
+        ).scalar()
+        or 0
+    )
+
+    rows = db.execute(
+        text(
+            """
+            SELECT coalesce(enrichment_batch_id, id) AS group_key,
+                   (enrichment_batch_id IS NOT NULL) AS is_batch,
+                   count(*) AS run_count,
+                   min(id::text) AS rep_id,
+                   min(created_at) AS first_created,
+                   max(created_at) AS last_created,
+                   max(completed_at) AS last_completed,
+                   coalesce(sum(contacts_extracted), 0) AS contacts_total,
+                   count(*) FILTER (WHERE status='completed') AS n_completed,
+                   count(*) FILTER (WHERE status='running') AS n_running,
+                   count(*) FILTER (WHERE status='pending') AS n_pending,
+                   count(*) FILTER (WHERE status='failed') AS n_failed,
+                   count(*) FILTER (WHERE status='over_budget') AS n_over_budget,
+                   count(*) FILTER (WHERE status='cancelling') AS n_cancelling
+            FROM prospect_runs
+            GROUP BY group_key, is_batch
+            ORDER BY last_created DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {"limit": limit, "offset": offset},
+    ).all()
+
+    def _is_batch_summary(r) -> bool:
+        return bool(r.is_batch) and r.run_count > 1
+
+    # Hydrate the singleton groups' full run rows in one batched query.
+    # rep_id comes back as text (Postgres has no min(uuid)); coerce back.
+    single_rep_ids = [
+        uuid.UUID(r.rep_id) for r in rows if not _is_batch_summary(r)
+    ]
+    single_runs = (
+        db.query(ProspectRun).filter(ProspectRun.id.in_(single_rep_ids)).all()
+        if single_rep_ids
+        else []
+    )
+    single_out_by_id = {ro.id: ro for ro in _runs_to_out(db, single_runs)}
+
+    # Up to 3 target names per batch for an at-a-glance label.
+    batch_ids = [r.group_key for r in rows if _is_batch_summary(r)]
+    names_by_batch: dict[uuid.UUID, list[str]] = {bid: [] for bid in batch_ids}
+    if batch_ids:
+        name_rows = (
+            db.query(ProspectRun.enrichment_batch_id, Contact.name)
+            .join(Contact, Contact.id == ProspectRun.enrichment_for_contact_id)
+            .filter(ProspectRun.enrichment_batch_id.in_(batch_ids))
+            .all()
+        )
+        for bid, name in name_rows:
+            lst = names_by_batch.get(bid)
+            if lst is not None and name and name not in lst and len(lst) < 3:
+                lst.append(name)
+
+    groups: list[RunGroupOut] = []
+    for r in rows:
+        if _is_batch_summary(r):
+            status_counts = {
+                label: getattr(r, attr)
+                for label, attr in _STATUS_COUNT_COLS
+                if getattr(r, attr)
+            }
+            groups.append(
+                RunGroupOut(
+                    kind="batch",
+                    batch=BatchSummaryOut(
+                        batch_id=r.group_key,
+                        run_count=r.run_count,
+                        status_counts=status_counts,
+                        contacts_found_total=int(r.contacts_total),
+                        first_created_at=r.first_created,
+                        last_activity_at=r.last_completed or r.last_created,
+                        sample_names=names_by_batch.get(r.group_key, []),
+                    ),
+                )
+            )
+        else:
+            ro = single_out_by_id.get(uuid.UUID(r.rep_id))
+            if ro is not None:
+                groups.append(RunGroupOut(kind="run", run=ro))
+
+    return GroupedRunsOut(groups=groups, total=int(total))
+
+
+@router.delete("/batch/{batch_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_batch(
+    batch_id: uuid.UUID,
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete every run in an enrichment batch in one shot. Refuses if any
+    run is still active (same guard as single delete) so we never yank rows
+    out from under a live orchestrator thread. Mirrors delete_run's cascade
+    + filesystem cleanup, looped over the batch."""
+    import shutil
+    from pathlib import Path
+
+    from app.models import Export
+
+    runs = (
+        db.query(ProspectRun)
+        .filter(ProspectRun.enrichment_batch_id == batch_id)
+        .all()
+    )
+    if not runs:
+        raise HTTPException(status_code=404, detail="batch not found")
+    if any(r.status in ("running", "cancelling") for r in runs):
+        raise HTTPException(
+            status_code=409,
+            detail="batch has runs still in progress; wait for them to finish",
+        )
+
+    run_ids = [r.id for r in runs]
+    db.query(Export).filter(Export.run_id.in_(run_ids)).delete(
+        synchronize_session=False
+    )
+    for r in runs:
+        db.delete(r)
+    db.commit()
+
+    for run_id in run_ids:
+        for root in (
+            "/var/lib/prospectforge/exports",
+            "/var/lib/prospectforge/archive",
+        ):
+            path = Path(root) / str(run_id)
+            if path.exists():
+                try:
+                    shutil.rmtree(path)
+                except OSError as exc:
+                    log.warning("failed to clear %s: %s", path, exc)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

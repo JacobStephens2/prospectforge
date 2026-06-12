@@ -149,6 +149,14 @@ class ProspectRun(Base):
         JSONB, nullable=True
     )
 
+    # Groups the per-contact enrichment runs spawned by a single "Enrich N
+    # visible" bulk request, so the /runs overview can collapse them into
+    # one row instead of N. NULL for one-off (single-contact) enrichments
+    # and for normal source runs.
+    enrichment_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
