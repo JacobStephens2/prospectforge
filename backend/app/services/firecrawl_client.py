@@ -44,6 +44,15 @@ def _hash(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
 
 
+def _scrub_surrogates(s: str | None) -> str | None:
+    """Strip lone UTF-16 surrogates (e.g. from a page's broken &#55349;
+    entities, passed through by Firecrawl's JSON). They aren't encodable
+    as UTF-8 and would crash raw-body archiving and DB writes."""
+    if s is None:
+        return None
+    return s.encode("utf-8", errors="replace").decode("utf-8")
+
+
 def _client() -> httpx.Client:
     return httpx.Client(
         base_url=settings.firecrawl_base_url,
@@ -109,8 +118,8 @@ def scrape(url: str, *, client: httpx.Client | None = None) -> FetchResult:
         # upstream image doesn't break the client.
         data = body.get("data") if isinstance(body.get("data"), dict) else body
 
-        markdown: str | None = data.get("markdown")
-        html: str | None = data.get("rawHtml") or data.get("html")
+        markdown: str | None = _scrub_surrogates(data.get("markdown"))
+        html: str | None = _scrub_surrogates(data.get("rawHtml") or data.get("html"))
         metadata = data.get("metadata") or {}
 
         # Firecrawl metadata exposes the final URL and the upstream HTTP

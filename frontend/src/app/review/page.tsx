@@ -263,6 +263,7 @@ function ReviewInner() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [bulkEnriching, setBulkEnriching] = useState(false);
+  const [bulkEnrichingMissing, setBulkEnrichingMissing] = useState(false);
   const [bulkEnrichResult, setBulkEnrichResult] = useState<string | null>(null);
   const [copiedForAI, setCopiedForAI] = useState(false);
 
@@ -352,6 +353,50 @@ function ReviewInner() {
       setBulkEnrichResult(`Error: ${(e as Error).message}`);
     } finally {
       setBulkEnriching(false);
+    }
+  }
+
+  async function bulkEnrichMissing() {
+    setBulkEnrichingMissing(true);
+    setBulkEnrichResult(null);
+    try {
+      // "All" = every contact in the current run scope missing both email
+      // and phone, regardless of the other filters in the toolbar. 500
+      // matches the backend's bulk-enrich cap.
+      const rows = await api.listContacts({
+        run_id: runId || undefined,
+        has_contact_info: false,
+        limit: 500,
+      });
+      if (rows.length === 0) {
+        setBulkEnrichResult("No contacts are missing both email and phone.");
+        return;
+      }
+      const cost = formatBulkCost(rows.length);
+      if (
+        !confirm(
+          `Start ${rows.length} enrichment runs on every contact${runId ? " in this run" : ""} ` +
+            `that has neither an email nor a phone?\n\n` +
+            `Approximate cost: ${cost} (per-run budget cap is $0.50; actual ` +
+            `cost is typically lower).\n\n` +
+            `Each runs in the background. Suggestions appear under each contact ` +
+            `in the detail modal when ready.\n\n` +
+            `Contacts whose organization has no website, no domain, and no ` +
+            `findable presence via web search will be skipped (you'll see a count).`,
+        )
+      ) {
+        return;
+      }
+      const result = await api.bulkEnrich(rows.map((c) => c.id));
+      const parts = [`Started ${result.started}`];
+      if (result.skipped.length > 0) {
+        parts.push(`skipped ${result.skipped.length} (no seedable org)`);
+      }
+      setBulkEnrichResult(parts.join(" · "));
+    } catch (e) {
+      setBulkEnrichResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setBulkEnrichingMissing(false);
     }
   }
 
@@ -568,7 +613,7 @@ function ReviewInner() {
           <Button
             variant="secondary"
             onClick={bulkEnrich}
-            disabled={bulkEnriching || contacts.length === 0}
+            disabled={bulkEnriching || bulkEnrichingMissing || contacts.length === 0}
             title={
               contacts.length === 0
                 ? "No contacts in the current filter view"
@@ -578,6 +623,14 @@ function ReviewInner() {
             {bulkEnriching
               ? "Starting…"
               : `Enrich ${contacts.length} visible`}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={bulkEnrichMissing}
+            disabled={bulkEnriching || bulkEnrichingMissing}
+            title={`Run enrichment on every contact${runId ? " in this run" : ""} that has neither an email nor a phone — regardless of the filters below. Each enrichment runs in the background.`}
+          >
+            {bulkEnrichingMissing ? "Starting…" : "Enrich all missing email & phone"}
           </Button>
           <Button
             variant="secondary"
