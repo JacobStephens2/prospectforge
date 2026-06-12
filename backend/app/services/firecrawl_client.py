@@ -55,8 +55,8 @@ def scrape(url: str, *, client: httpx.Client | None = None) -> FetchResult:
     """Tier-2 fetch: POST to /v2/scrape, return a FetchResult.
 
     Firecrawl handles redirects, JS, and content extraction itself. We
-    request both markdown and html so the orchestrator can pass markdown
-    straight to the extractor while still archiving raw html.
+    request markdown (fed straight to the extractor) plus rawHtml (used
+    for link discovery and archived as the raw body).
     """
     own = client is None
     if client is None:
@@ -64,7 +64,11 @@ def scrape(url: str, *, client: httpx.Client | None = None) -> FetchResult:
 
     payload = {
         "url": url,
-        "formats": ["markdown", "html"],
+        # rawHtml (full rendered DOM), not html (cleaned/readability): the
+        # cleaned variant strips nav menus, which is where CMS sites keep
+        # their directory links — feeding it to discover_links() starved
+        # Tier-2 frontiers to ~1 link (leonschools.net: 1 vs 626).
+        "formats": ["markdown", "rawHtml"],
         # Skip waiting on a network-quiet signal beyond the default; Playwright
         # already handles "page loaded" reasonably. If we hit problems with
         # late-loading directories we can add `waitFor: 2000` here.
@@ -106,7 +110,7 @@ def scrape(url: str, *, client: httpx.Client | None = None) -> FetchResult:
         data = body.get("data") if isinstance(body.get("data"), dict) else body
 
         markdown: str | None = data.get("markdown")
-        html: str | None = data.get("html") or data.get("rawHtml")
+        html: str | None = data.get("rawHtml") or data.get("html")
         metadata = data.get("metadata") or {}
 
         # Firecrawl metadata exposes the final URL and the upstream HTTP
