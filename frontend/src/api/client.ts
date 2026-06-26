@@ -66,9 +66,12 @@ export const api = {
   me: () => request<Me>("/api/auth/me", {}, { redirectOn401: false }),
   logout: () =>
     request<void>("/api/auth/logout", { method: "POST" }, { redirectOn401: false }),
-  // Users
+  // Users (access whitelist — admin only)
+  listUsers: () => request<UserRow[]>("/api/users"),
   createUser: (b: { email: string; full_name: string; role: string }) =>
-    request("/api/users", { method: "POST", body: JSON.stringify(b) }),
+    request<UserRow>("/api/users", { method: "POST", body: JSON.stringify(b) }),
+  updateUser: (id: string, b: { role?: string; active?: boolean }) =>
+    request<UserRow>(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
   // Sources
   listSources: (opts: { activeOnly?: boolean } = {}) =>
     request<Source[]>(`/api/sources?active_only=${opts.activeOnly === false ? "false" : "true"}`),
@@ -170,6 +173,15 @@ export interface Me {
   email: string;
   full_name: string;
   role: string;
+}
+
+export interface UserRow {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  active: boolean;
+  created_at: string;
 }
 
 // ----- shared types (replace with codegen output of `pnpm run gen-api`) -----

@@ -24,6 +24,11 @@ export function Nav() {
     api.me().then(setMe).catch(() => setMe(null));
   }, [pathname]);
 
+  const navItems =
+    me?.role === "admin"
+      ? [...items, { href: "/admin/users", label: "Users" }]
+      : items;
+
   async function logout() {
     try {
       await api.logout();
@@ -39,7 +44,7 @@ export function Nav() {
           ProspectForge
         </Link>
         <div className="flex gap-1 flex-1">
-          {items.map((it) => {
+          {navItems.map((it) => {
             const active = pathname.startsWith(it.href);
             return (
               <Link
