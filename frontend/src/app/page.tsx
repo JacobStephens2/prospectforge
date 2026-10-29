@@ -7,9 +7,7 @@ export default function Home() {
       <h1>ProspectForge</h1>
       <p className="text-neutral-600">
         Acme&apos;s internal contact-sourcing tool. Paste a curated URL, get back a
-        reviewed, evidence-backed, segment-tagged contact list. See the spec at
-        <code className="ml-1">tasks/prospectforge_spec_v2.md</code> on the
-        orchestration host.
+        reviewed, evidence-backed, segment-tagged contact list.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Link href="/sources" className="no-underline">

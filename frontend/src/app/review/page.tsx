@@ -60,7 +60,7 @@ function emailConfidenceTitle(s: string): string {
  */
 function formatContactForAI(c: Contact): string {
   const lines: string[] = [];
-  lines.push("ProspectForge contact record (Acme Acme Travel)");
+  lines.push("ProspectForge contact record (Acme Travel)");
   lines.push("");
   lines.push(`Name: ${c.name}`);
   lines.push(`Title: ${c.title ?? "(unknown)"}`);
